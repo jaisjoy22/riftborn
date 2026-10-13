@@ -6,6 +6,9 @@ NPCs with memory, and a fully synthesized techno/dubstep soundtrack.
 Pure Swift + SpriteKit + AVAudioEngine. No assets, no dependencies.
 
 Build:   ./build.sh
+Dev:     ./dev.sh check | ./dev.sh route "<task>" | ./dev.sh task "<task>"
+         (tasks are JEV-routed: mechanical -> gemini-flash, moderate -> opus-5.5,
+          deep -> gpt-6-astra plan + opus-5.5 execute; passing selftest auto-commits + pushes)
 Play:    open build/Riftborn.app
          (or build/Riftborn.app/Contents/MacOS/Riftborn --fullscreen --fps)
 Test:    build/Riftborn.app/Contents/MacOS/Riftborn --selftest   (headless 4-min autopilot)
