@@ -46,7 +46,7 @@ final class GameScene: SKScene {
     var lastTime: TimeInterval = 0
     var lastBuildMs = 0.0
     var stats = (kills: 0, spared: 0, talks: 0, portals: 0, frames: 0)
-    var combat = (hits: 0, blockedByFoe: 0, playerBlocks: 0, parries: 0, hitStopFrames: 0)
+    var combat = (hits: 0, blockedByFoe: 0, playerBlocks: 0, parries: 0, hitStopFrames: 0, guardBreaks: 0)
     var toast: [(SKLabelNode, Double)] = []
 
     // HUD nodes
@@ -142,7 +142,7 @@ final class GameScene: SKScene {
 
         player = Player(pos: CGPoint(x: (CGFloat(world.start.x) + 0.5) * T, y: CGFloat(world.start.y) * T))
         player.maxHP = CGFloat(chron.maxHP); player.hp = player.maxHP
-        player.onWhoosh = { [weak self] in self?.synth?.sfxWhoosh = (self?.player.combo == 2) ? 1.5 : 1 }
+        player.onWhoosh = { [weak self] in self?.synth?.sfxWhoosh = (self?.player.attackKind == .overhead) ? 1.5 : 1 }
         worldNode.addChild(player.node)
         camBase = CGPoint(x: player.pos.x, y: player.pos.y + 70)
 
@@ -360,6 +360,9 @@ final class GameScene: SKScene {
         stats.frames += 1
         input.poll()
         if input.hit(.pause) { mode = (mode == .paused) ? .play : (mode == .play ? .paused : mode); refreshPanel() }
+        // Capture attack presses (with their modifier) once per poll, even while hit-stop freezes play.
+        // Any modal mode discards a pending buffer so it cannot fire on return.
+        if let p = player { if mode == .play { p.captureAttack(input) } else { p.discardAttackBuffer() } }
         // Hit-stop: freeze simulation for a few frames on impact (sells weight; standard in AAA melee)
         if hitStop > 0 { hitStop -= Double(dt); combat.hitStopFrames += 1; updateCamera(dt); return }
         switch mode {
@@ -392,7 +395,7 @@ final class GameScene: SKScene {
         let sx = shake > 0 ? vrand(-shake...shake) * 0.5 + shakeDir * shake * 0.6 : 0
         let sy = shake > 0 ? vrand(-shake...shake) * 0.6 : 0
         cam.position = CGPoint(x: camBase.x + sx * zoom, y: camBase.y + sy * zoom)
-        cam.setScale(zoom * (1 + zoomPunch)); zoomPunch *= 0.88
+        cam.setScale(zoom * (1 + clamp(zoomPunch, -0.035, 0.035))); zoomPunch *= 0.88
         // Camera children already scale with the camera, so the HUD keeps a constant on-screen size as-is.
         hud.setScale(1); vignette.setScale(1); hurtOverlay.setScale(1)
         // Light pool: move the 6 real lights to the torches nearest the camera (SpriteKit caps lights per sprite at 8)
@@ -407,7 +410,7 @@ final class GameScene: SKScene {
     /// One-stop impact juice. dir = which way the hit pushes (screen-x).
     func impact(at p: CGPoint, dir: CGFloat, stop: Double, shake s: CGFloat, color: SKColor, blood: Bool, heavy: Bool) {
         hitStop = max(hitStop, stop)
-        shake = max(shake, s); shakeDir = dir
+        shake = min(10, max(shake, s)); shakeDir = dir
         if heavy { zoomPunch = -0.035 }
         synth?.sfxHit = heavy ? 1.6 : 1
         // Slash flash
@@ -487,21 +490,28 @@ final class GameScene: SKScene {
             if let s = swing, b.role == .hostile, s.intersects(b.rect), b.lastHitSwing != player.swingId {
                 b.lastHitSwing = player.swingId
                 let hitPoint = CGPoint(x: b.pos.x - player.facing * 6, y: b.pos.y + b.size.height * 0.6)
-                if b.blocking && (b.pos.x - player.pos.x) * b.facing < 0 && player.spec.damage < 2 {
+                let guarded = b.blocking && (b.pos.x - player.pos.x) * b.facing < 0
+                let baseDmg = CGFloat(chron.power) * player.swingDamage * (overcharge > 0 ? 2 : 1) * (b.stun > 0 ? 1.5 : 1)
+                if guarded && player.spec.breaksGuard {
+                    // Guard break: block shattered, single stagger, reduced damage. Not a parry.
+                    b.breakGuard(dir: player.facing); combat.guardBreaks += 1; combat.hits += 1
+                    synth?.sfxClang = 1.3
+                    damage(b, baseDmg * 0.65, by: nil, dir: player.facing, spec: player.spec)
+                } else if guarded {
                     // PoP blockedstrike: steel on steel, attacker recoils, defender may riposte
                     b.blockedHit(); player.recoil(); combat.blockedByFoe += 1
                     impact(at: hitPoint, dir: player.facing, stop: 0.07, shake: 5, color: SKColor(red: 1, green: 0.9, blue: 0.5, alpha: 1), blood: false, heavy: false)
                     synth?.sfxClang = 1
                 } else {
-                    let dmg = CGFloat(chron.power) * player.swingDamage * (overcharge > 0 ? 2 : 1) * (b.stun > 0 ? 1.5 : 1)
-                    b.hitReact(knock: player.spec.knock * (b.soul.faction == .wardens ? 0.6 : 1), dir: player.facing)
+                    b.hitReact(knock: player.spec.knock * (b.soul.faction == .wardens ? 0.6 : 1), dir: player.facing, high: player.attackKind == .overhead)
                     combat.hits += 1
-                    damage(b, dmg, by: nil, dir: player.facing, spec: player.spec)
+                    damage(b, baseDmg, by: nil, dir: player.facing, spec: player.spec)
                 }
             }
             if b.role == .fleeing && hypot(player.pos.x - b.pos.x, player.pos.y - b.pos.y) > 700 { b.dead = true; b.node.removeFromParent() }
             if b.standingOnSpike(world) && b.soul.faction != .hive { damage(b, 2, by: nil, dir: 0, spec: nil) }
         }
+        updateCorpses(dt)
         beings.removeAll { $0.dead && $0.node.parent == nil }
 
         updateBolts(dt)
@@ -556,7 +566,8 @@ final class GameScene: SKScene {
     }
 
     func kill(_ b: Being) {
-        b.dead = true; stats.kills += 1
+        guard !b.dead else { return }            // consequences are awarded exactly once
+        b.dead = true; b.deathT = 0; stats.kills += 1
         barkAt(b, Mind.deathLine(b.soul, &rng))
         b.soul.alive = false
         writeBack(b)
@@ -571,8 +582,22 @@ final class GameScene: SKScene {
             chron.note("\(b.soul.name), who walked beside you, fell.")
         }
         synth?.sfxDeath = 1
-        hitStop = max(hitStop, 0.16); zoomPunch = -0.05; slowMoT = 0.35
-        b.node.run(.sequence([.wait(forDuration: 1.1), .fadeOut(withDuration: 0.8), .removeFromParent()]))
+        hitStop = max(hitStop, 0.10); zoomPunch = -0.035; slowMoT = max(slowMoT, 0.25)
+        // Corpse lifetime is driven by `updateCorpses` in gameplay time (fade 1.1 s -> removal 1.9 s).
+    }
+
+    static let corpseCap = 8
+    /// Separate pass for the dead: collapse/settle animation and timed removal. Never runs AI or melee.
+    func updateCorpses(_ dt: CGFloat) {
+        let corpses = beings.filter { $0.dead && $0.node.parent != nil }
+        if corpses.count > GameScene.corpseCap {
+            for c in corpses.sorted(by: { $0.deathT > $1.deathT }).prefix(corpses.count - GameScene.corpseCap) { c.node.removeFromParent() }
+        }
+        for c in corpses where c.node.parent != nil {
+            c.updateDeath(dt, world)
+            if c.deathT > 1.1 { c.node.alpha = CGFloat(max(0, 1 - (c.deathT - 1.1) / 0.8)) }
+            if c.deathT >= 1.9 { c.node.removeFromParent() }
+        }
     }
 
     func hurtPlayer(_ amt: CGFloat, from b: Being?) {
@@ -583,7 +608,7 @@ final class GameScene: SKScene {
             if player.parryWindow > 0, let b = b {
                 // Perfect parry: attacker staggers, time slows, riposte window opens
                 b.parried(); player.parryWindow = 0; combat.parries += 1
-                impact(at: hp, dir: -dir, stop: 0.14, shake: 9, color: .cyan, blood: false, heavy: true)
+                impact(at: hp, dir: -dir, stop: 0.085, shake: 9, color: .cyan, blood: false, heavy: true)
                 synth?.sfxClang = 1.5; slowMoT = 0.5
                 flash("PARRY"); return
             }
@@ -593,6 +618,7 @@ final class GameScene: SKScene {
         } else {
             player.hp -= amt; player.hurtFlash = 0.12; player.hurtPose = 0.25; player.invuln = 0.5
             player.phase = .none
+            player.cancelTraversal(); player.discardAttackBuffer()
             player.vel.dx = dir * 340; player.vel.dy = 320
             impact(at: hp, dir: dir, stop: 0.09, shake: 11, color: .red, blood: true, heavy: false)
             damageVignette = 1
@@ -602,6 +628,7 @@ final class GameScene: SKScene {
 
     func die(killer: Being?) {
         mode = .dead; chron.deaths += 1
+        player.cancelTraversal(); player.discardAttackBuffer()
         let lost = chron.shards / 2; chron.shards -= lost
         var line = "You fell in \(theme.name).\nLost \(lost) shards."
         if let k = killer {
@@ -630,6 +657,7 @@ final class GameScene: SKScene {
     }
 
     func castPower() {
+        guard player.moveMode == .free else { return }     // no powers while hanging/climbing
         guard !chron.powers.isEmpty else { flash("No powers. Find a shrine."); return }
         let p = chron.powers[player.powerIndex % chron.powers.count]
         let cost: CGFloat = p == "Blink" ? 20 : 40

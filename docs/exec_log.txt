@@ -21,3 +21,11 @@ Session:        20261013_123315_a2651f
 Title:          Implement traversal with explicit authority
 Duration:       18m 47s
 Messages:       39 (1 user, 38 tool calls)
+PHASE 3 VERIFIED + PUSHED (184c7ac)
+=== PHASE 4. Directional, committed combat ===
+  hermes -c "Implement Riftborn directional combat"
+
+Session:        20261013_125228_441042
+Title:          Implement Riftborn directional combat
+Duration:       15m 45s
+Messages:       99 (1 user, 97 tool calls)

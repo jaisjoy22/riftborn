@@ -63,12 +63,21 @@ class Body {
 /// Recovery is deliberately longer than wind-up: that is what makes a swing feel committed.
 enum Phase { case none, windup, active, recovery }
 
+/// Directional attack selection: up+attack = overhead, down+attack = thrust, otherwise the slash chain.
+enum AttackKind { case slash, thrust, overhead }
+
+/// Traversal authority hook (free = ordinary physics). Hang/climb modes are owned by traversal code.
+enum MoveMode { case free, hang, climb }
+
 struct AttackSpec {
     let windup: Double, active: Double, recovery: Double
     let lunge: CGFloat, reach: CGFloat, damage: CGFloat, knock: CGFloat, hitStop: Double, shake: CGFloat
+    var breaksGuard: Bool = false     // explicit; never inferred from damage
     static let light1 = AttackSpec(windup: 0.085, active: 0.075, recovery: 0.17, lunge: 230, reach: 58, damage: 1.0, knock: 240, hitStop: 0.055, shake: 5)
     static let light2 = AttackSpec(windup: 0.075, active: 0.075, recovery: 0.17, lunge: 260, reach: 60, damage: 1.1, knock: 260, hitStop: 0.06, shake: 6)
-    static let heavy  = AttackSpec(windup: 0.17, active: 0.10, recovery: 0.32, lunge: 520, reach: 76, damage: 2.4, knock: 560, hitStop: 0.12, shake: 13)
+    static let heavy  = AttackSpec(windup: 0.17, active: 0.10, recovery: 0.32, lunge: 360, reach: 76, damage: 2.4, knock: 460, hitStop: 0.085, shake: 9, breaksGuard: true)
+    static let thrust = AttackSpec(windup: 0.09, active: 0.07, recovery: 0.22, lunge: 260, reach: 78, damage: 0.90, knock: 180, hitStop: 0.045, shake: 4)
+    static let overheadCost: CGFloat = 20
 }
 
 // MARK: - Player
@@ -79,6 +88,11 @@ final class Player: Body {
     var facing: CGFloat = 1
     var phase = Phase.none, phaseT = 0.0, combo = 0, bufferedAttack = 0.0
     var spec = AttackSpec.light1
+    var attackKind = AttackKind.slash, bufferedKind = AttackKind.slash
+    var recoilLock: Double = 0
+    var comboGap = 1.0                 // gameplay seconds since the last attack ended (chain window)
+    var moveMode = MoveMode.free
+    private var capturedPoll: (ObjectIdentifier, Int)? = nil
     var swingId = 0
     var dashTimer = 0.0, dashCD = 0.0, invuln = 0.0
     var blocking = false, parryWindow = 0.0
@@ -105,25 +119,67 @@ final class Player: Body {
     var attacking: Bool { phase != .none }
     var threatening: Bool { phase == .windup || phase == .active }
 
+    /// Starts the buffered attack kind (slash by default). Overhead costs energy; if short, falls back to light1.
     func startAttack() {
-        combo = (phase != .none || bufferedAttack > -0.3) ? (combo + 1) % 3 : 0
-        spec = combo == 2 ? .heavy : (combo == 1 ? .light2 : .light1)
+        var kind = bufferedKind
+        bufferedKind = .slash
+        if kind == .slash {
+            let chaining = phase != .none || comboGap < 0.3
+            combo = chaining ? (combo + 1) % 3 : 0
+            if combo == 2 { kind = .overhead }          // chain finisher
+        } else {
+            combo = -1                                   // direct thrust/overhead resets the chain
+        }
+        if kind == .overhead {
+            if energy >= AttackSpec.overheadCost { energy -= AttackSpec.overheadCost }
+            else { kind = .slash; combo = 0 }
+        }
+        attackKind = kind
+        switch kind {
+        case .slash: spec = combo == 1 ? .light2 : .light1
+        case .thrust: spec = .thrust
+        case .overhead: spec = .heavy
+        }
         phase = .windup; phaseT = spec.windup
+        comboGap = 0
         swingId += 1
     }
 
+    /// Records an attack press and its directional modifier at press time. Safe to call more than once per
+    /// poll (the scene calls it every poll, including during hit-stop; `update` calls it for standalone use).
+    func captureAttack(_ inp: Input) {
+        let key = (ObjectIdentifier(inp), inp.pollCount)
+        if let c = capturedPoll, c.0 == key.0, c.1 == key.1 { return }
+        capturedPoll = key
+        guard inp.hit(.attack) && !blocking else { return }
+        bufferedAttack = 0.25
+        bufferedKind = inp.held(.up) ? .overhead : (inp.held(.down) ? .thrust : .slash)   // up wins
+    }
+
+    func discardAttackBuffer() { bufferedAttack = 0; bufferedKind = .slash }
+
+    /// Leave any traversal mode and restore ordinary physics (damage, removed support).
+    func cancelTraversal() {
+        moveMode = .free
+        discardAttackBuffer()
+    }
+
     /// Our strike was blocked: PoP's "blockedstrike" drops straight into a long recovery.
-    func recoil() { phase = .recovery; phaseT = 0.38; combo = 0; vel.dx = -facing * 260 }
+    func recoil() { phase = .recovery; phaseT = 0.38; recoilLock = 0.38; combo = 0; vel.dx = -facing * 260; discardAttackBuffer() }
 
     func update(_ dt: CGFloat, _ w: World, _ inp: Input) {
         let d = Double(dt)
         clock += dt
         dashTimer = max(0, dashTimer - d); dashCD = max(0, dashCD - d); invuln = max(0, invuln - d)
         parryWindow = max(0, parryWindow - d); hurtFlash = max(0, hurtFlash - d); hurtPose = max(0, hurtPose - d)
-        landSquash = max(0, landSquash - d)
-        bufferedAttack -= d
+        landSquash = max(0, landSquash - d); recoilLock = max(0, recoilLock - d)
+        if phase == .none { comboGap += d }
+        captureAttack(inp)
+        let attackPress = inp.hit(.attack)
+        if bufferedAttack > 0 { bufferedAttack = max(0, bufferedAttack - d); if bufferedAttack == 0 { bufferedKind = .slash } }
         coyote = onGround ? 0.1 : max(0, coyote - d)
-        jumpBuffer = inp.hit(.jump) ? 0.12 : max(0, jumpBuffer - d)
+        // An attack press owns this step: up/down are modifiers, so they must not also jump.
+        jumpBuffer = (inp.hit(.jump) && !attackPress) ? 0.12 : max(0, jumpBuffer - d)
         energy = min(100, energy + 12 * dt)
 
         var dir: CGFloat = 0
@@ -132,7 +188,6 @@ final class Player: Body {
         if dir != 0 && phase == .none { facing = dir }
 
         // Attack state machine with input buffering (press during active/recovery chains the combo)
-        if inp.hit(.attack) && !blocking { bufferedAttack = 0.25 }
         if phase != .none {
             phaseT -= d
             if phaseT <= 0 {
@@ -141,15 +196,15 @@ final class Player: Body {
                     phase = .active; phaseT = spec.active; onWhoosh?()
                     if onGround { vel.dx = facing * spec.lunge }
                 case .active: phase = .recovery; phaseT = spec.recovery
-                case .recovery: phase = .none
+                case .recovery: phase = .none; recoilLock = 0
                 case .none: break
                 }
             }
-            // Cancel recovery into the next combo hit (but never cancel the heavy finisher)
-            if phase == .recovery && bufferedAttack > 0 && combo < 2 && phaseT < spec.recovery - 0.04 {
+            // Cancel recovery into the next attack after 0.09 s (never the heavy recovery or a recoil)
+            if chainOpen && bufferedAttack > 0 {
                 bufferedAttack = 0; startAttack()
             }
-        } else if bufferedAttack > 0 {
+        } else if bufferedAttack > 0 && recoilLock == 0 {
             bufferedAttack = 0
             if dir != 0 { facing = dir }
             startAttack()
@@ -159,7 +214,7 @@ final class Player: Body {
         blocking = inp.held(.block) && onGround && dashTimer == 0 && phase == .none
         if blocking && !wasBlocking { parryWindow = 0.2 }
 
-        if inp.hit(.dash) && dashCD == 0 && energy >= 15 && phase != .active {
+        if inp.hit(.dash) && dashCD == 0 && energy >= 15 && phase != .active && recoilLock == 0 {
             phase = .none
             dashTimer = 0.18; dashCD = 0.45; invuln = 0.22; energy -= 15
             if dir != 0 { facing = dir }
@@ -169,9 +224,9 @@ final class Player: Body {
         if dashTimer > 0 {
             vel.dy = 0
         } else if phase == .active {
-            vel.dx *= 0.86   // lunge decays: weight
+            vel.dx *= pow(0.86, dt * 60)   // lunge decays: weight (time-scaled; 0.86 per step at 60 Hz)
         } else if phase == .windup || (phase == .recovery) {
-            vel.dx *= 0.80   // rooted while committing
+            vel.dx *= pow(0.80, dt * 60)   // rooted while committing
         } else {
             let speed: CGFloat = blocking ? 90 : 300
             let accel: CGFloat = onGround ? 3000 : 1600
@@ -188,7 +243,7 @@ final class Player: Body {
         }
         if onGround { wallRunTime = 0 }
 
-        if jumpBuffer > 0 && phase != .active {
+        if jumpBuffer > 0 && phase != .active && recoilLock == 0 {
             if coyote > 0 {
                 if inp.held(.down) && w.at(Int(pos.x / T), Int((pos.y - 1) / T)) == .ledge { dropThrough = 0.25 }
                 else { vel.dy = 760; phase = .none }
@@ -210,10 +265,10 @@ final class Player: Body {
     private func animate(_ dt: CGFloat, wallRunning: Bool) {
         var target: Pose
         var rate: CGFloat = 16
-        let heavy = combo == 2
+        let heavy = attackKind == .overhead, thrust = attackKind == .thrust
         switch phase {
-        case .windup:  target = heavy ? .heavyWindup : .windup; rate = 30
-        case .active:  target = heavy ? .heavyStrike : .strike; rate = 60     // near-instant: reads as a smear
+        case .windup:  target = heavy ? .heavyWindup : (thrust ? .thrustWindup : .windup); rate = 30
+        case .active:  target = heavy ? .heavyStrike : (thrust ? .thrustStrike : .strike); rate = 60     // near-instant: reads as a smear
         case .recovery: target = .recover; rate = 9
         case .none:
             if hurtPose > 0 { target = .hurt; rate = 40 }
@@ -226,7 +281,7 @@ final class Player: Body {
                 target = .run(runPhase); rate = 22
             } else { target = .breathe(clock); rate = 10 }
         }
-        if combo == 1 && phase != .none { target.shF += 0.25; target.sword -= 0.3 }   // second hit: different arc
+        if combo == 1 && attackKind == .slash && phase != .none { target.shF += 0.25; target.sword -= 0.3 }   // second hit: different arc
         if landSquash > 0 { target.bodyY -= 7; target.knF -= 0.6; target.knB -= 0.6; target.hipF += 0.4 }
         cur = Pose.lerp(cur, target, min(1, rate * dt))
         rig.apply(cur, facing: facing)
@@ -239,8 +294,15 @@ final class Player: Body {
     var swing: CGRect? {
         guard phase == .active else { return nil }
         let reach = spec.reach
-        return CGRect(x: facing > 0 ? pos.x - 6 : pos.x - reach + 6, y: pos.y + 2, width: reach, height: 52)
+        let x = facing > 0 ? pos.x - 6 : pos.x - reach + 6
+        switch attackKind {
+        case .slash: return CGRect(x: x, y: pos.y + 2, width: reach, height: 52)
+        case .thrust: return CGRect(x: x, y: pos.y + 22, width: reach, height: 22)      // narrow chest-height line
+        case .overhead: return CGRect(x: x, y: pos.y + 2, width: reach, height: 66)     // tall arc over the head
+        }
     }
+    /// Light chaining opens 0.09 s into recovery; heavy recovery and recoil are uncancellable.
+    var chainOpen: Bool { phase == .recovery && recoilLock == 0 && attackKind != .overhead && spec.recovery - phaseT >= 0.09 - 1e-9 }
     var swingDamage: CGFloat { spec.damage }
 }
 
@@ -259,6 +321,8 @@ final class Being: Body {
     var flashT = 0.0, hurtT = 0.0
     var bark: String? = nil
     var dead = false
+    var deathT: Double = 0
+    var hurtHigh = false
     var talked = false
     let rig: Rig
     let tint: SKColor
@@ -340,10 +404,26 @@ final class Being: Body {
     var windupTime: Double { soul.faction == .wardens ? 0.42 : (soul.faction == .hive ? 0.26 : 0.38) }
 
     func parried() { stun = 1.0; phase = .none; hitDone = true; vel.dx = -facing * 240 }
-    func hitReact(knock: CGFloat, dir: CGFloat) {
-        flashT = 0.08; hurtT = 0.22; phase = .none
+    func hitReact(knock: CGFloat, dir: CGFloat) { hitReact(knock: knock, dir: dir, high: false) }
+    func hitReact(knock: CGFloat, dir: CGFloat, high: Bool) {
+        flashT = 0.08; hurtT = 0.22; phase = .none; hurtHigh = high
         vel.dx = dir * knock; vel.dy = 160 + knock * 0.25
         refrac = Double(Being.refractimer[skill]) / 12.0     // PoP guard_refrac
+    }
+    /// Guard broken by a heavy: guard drops, attack aborts, brief stagger. Distinct from `parried()`.
+    func breakGuard(dir: CGFloat) {
+        blockT = 0; phase = .none; hitDone = true; stun = 0.45; justBlocked = 0; hurtHigh = true
+        flashT = 0.08; vel.dx = dir * 200
+    }
+    /// Corpse pass: collision-aware fall, 0.30 s collapse into `.dead`, then settle. No AI, no melee.
+    func updateDeath(_ dt: CGFloat, _ world: World) {
+        deathT += Double(dt)
+        if deathT > 0.30 && onGround { vel = .zero } else { vel.dx *= pow(0.85, dt * 60) }
+        if !(deathT > 0.30 && onGround) { step(dt, world) }   // settled corpses never bounce
+        else { node.position = pos }
+        flashT = max(0, flashT - Double(dt)); hurtT = 0; stun = 0; blockT = 0; phase = .none
+        animate(dt)
+        hpBar.isHidden = true
     }
     func blockedHit() { justBlocked = 0.5; justParried = 0.6; blockT = 0.2; vel.dx = -facing * 120 }
 
@@ -459,8 +539,8 @@ final class Being: Body {
 
     private func animate(_ dt: CGFloat) {
         var target: Pose, rate: CGFloat = 14
-        if dead { target = .dead; rate = 8 }
-        else if hurtT > 0 { target = .hurt; rate = 40 }
+        if dead { target = deathT < 0.30 ? Pose.lerp(.hurtHigh, .dead, CGFloat(deathT / 0.30)) : .dead; rate = deathT < 0.30 ? 30 : 8 }
+        else if hurtT > 0 { target = hurtHigh ? .hurtHigh : .hurt; rate = 40 }
         else if stun > 0 { target = .hurt; target.torso += 0.2 * sin(clock * 9); rate = 12 }
         else {
             switch phase {

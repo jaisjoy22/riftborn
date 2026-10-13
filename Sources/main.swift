@@ -196,6 +196,7 @@ func selfTest() -> Int32 {
 
     // v3 deterministic fixtures (isolated scenes; run after the unchanged progression harness).
     runV3Tests(&failures)
+    runV3CombatTests(&failures)
 
     print("""
     RIFTBORN SELFTEST

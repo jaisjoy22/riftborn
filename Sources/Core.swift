@@ -26,8 +26,10 @@ final class Input {
     /// Plan-v3 spelling of `suppressHardware` (same storage).
     var suppressesHardware: Bool { get { suppressHardware } set { suppressHardware = newValue } }
     private var now = Set<Act>(), prev = Set<Act>()
+    private(set) var pollCount = 0       // lets consumers capture each poll's edges exactly once
 
     func poll() {
+        pollCount &+= 1
         prev = now
         var s = synthetic
         if suppressHardware { now = s; return }

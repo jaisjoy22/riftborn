@@ -23,9 +23,13 @@ struct Pose {
     static let strike = Pose(torso: -0.38, head: 0.2, lean: 10, shF: 1.35, elF: -0.05, shB: -1.2, elB: 0.4, hipF: 0.9, knF: -0.7, hipB: -0.75, knB: -0.1, sword: -0.08)
     static let heavyWindup = Pose(torso: 0.5, head: -0.2, bodyY: -4, lean: -6, shF: 3.0, elF: 0.4, shB: 2.6, elB: 0.6, hipF: 0.5, knF: -1.0, hipB: -0.5, knB: -0.6, sword: 1.6)
     static let heavyStrike = Pose(torso: -0.6, head: 0.25, bodyY: -8, lean: 14, shF: 0.4, elF: -0.1, shB: 0.3, elB: 0.1, hipF: 1.2, knF: -1.2, hipB: -0.9, knB: -0.1, sword: -0.9)
+    // Thrust: blade drawn back level at the hip, then driven straight out at chest height.
+    static let thrustWindup = Pose(torso: 0.2, head: -0.05, bodyY: -3, lean: -6, shF: 0.3, elF: 1.6, shB: -0.9, elB: 0.8, hipF: 0.45, knF: -0.8, hipB: -0.6, knB: -0.5, sword: 1.55)
+    static let thrustStrike = Pose(torso: -0.3, head: 0.1, bodyY: -6, lean: 12, shF: 1.57, elF: 0.0, shB: -1.4, elB: 0.2, hipF: 1.1, knF: -0.9, hipB: -0.95, knB: -0.05, sword: 0.0)
     static let recover = Pose(torso: -0.12, lean: 4, shF: 0.7, elF: 0.3, shB: -0.6, elB: 0.9, hipF: 0.5, knF: -0.5, hipB: -0.45, knB: -0.2, sword: -0.3)
     static let block = Pose(torso: 0.12, lean: -2, shF: 1.6, elF: 1.1, shB: 1.1, elB: 1.4, hipF: 0.4, knF: -0.5, hipB: -0.5, knB: -0.3, sword: 1.45)
     static let hurt = Pose(torso: 0.45, head: 0.4, lean: -8, shF: -0.6, elF: 0.8, shB: 0.8, elB: 0.5, hipF: -0.2, knF: -0.3, hipB: 0.3, knB: -0.4, sword: -1.2)
+    static let hurtHigh = Pose(torso: 0.7, head: 0.75, bodyY: -6, lean: -12, shF: -1.0, elF: 0.9, shB: 1.4, elB: 0.6, hipF: -0.35, knF: -0.7, hipB: 0.45, knB: -0.8, sword: -1.5)
     static let jump = Pose(torso: -0.1, head: 0.1, shF: 2.2, elF: 0.6, shB: -0.9, elB: 0.6, hipF: 1.2, knF: -1.6, hipB: -0.2, knB: -1.1, sword: 0.6)
     static let fall = Pose(torso: 0.05, shF: 2.6, elF: 0.4, shB: 2.4, elB: 0.5, hipF: 0.5, knF: -0.5, hipB: -0.3, knB: -0.6, sword: 1.0)
     static let wallRun = Pose(torso: -0.25, head: 0.15, shF: 2.4, elF: 0.8, shB: -1.4, elB: 0.6, hipF: 1.5, knF: -1.4, hipB: 0.2, knB: -1.6, sword: -1.0)
