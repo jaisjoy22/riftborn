@@ -5,3 +5,11 @@ Session:        20261013_115508_f330eb
 Title:          Implement Riftborn baseline harness
 Duration:       14m 30s
 Messages:       96 (1 user, 94 tool calls)
+PHASE 1 VERIFIED + PUSHED (36eb8fa)
+=== PHASE 2. Procedural silhouette and environment readability ===
+  hermes -c "Implement procedural silhouette and environment"
+
+Session:        20261013_121018_e0265a
+Title:          Implement procedural silhouette and environment
+Duration:       22m 32s
+Messages:       49 (2 user, 46 tool calls)

@@ -166,6 +166,142 @@ enum Art {
         }
     }
 
+    // MARK: Garments, pips, potions (v3 §2)
+
+    /// Quantized RGBA cache-key component (full colour, never the variant alone).
+    static func colorKey(_ c: SKColor) -> String {
+        let s = c.usingColorSpace(.deviceRGB) ?? c
+        func q(_ v: CGFloat) -> Int { Int((clamp(v, 0, 1) * 255).rounded()) }
+        return "\(q(s.redComponent))_\(q(s.greenComponent))_\(q(s.blueComponent))_\(q(s.alphaComponent))"
+    }
+    /// Colour painted into a garment texture: the base's full-brightness chroma lifted halfway to white.
+    /// SpriteKit sprite tinting multiplies, so the sprite tint (`garmentTint`) restores the exact base
+    /// colour, while a damage flash (tint -> white) can still brighten the garment toward a pale highlight.
+    static func garmentPaint(_ c: SKColor) -> SKColor {
+        let s = c.usingColorSpace(.deviceRGB) ?? c
+        let v = max(0.001, s.redComponent, s.greenComponent, s.blueComponent)
+        return SKColor(red: 0.5 + 0.5 * s.redComponent / v, green: 0.5 + 0.5 * s.greenComponent / v, blue: 0.5 + 0.5 * s.blueComponent / v, alpha: 1)
+    }
+    /// Per-channel tint that maps a texture painted from `base` to the displayed colour `actual`.
+    static func garmentTint(_ actual: SKColor, base: SKColor) -> SKColor {
+        let a = actual.usingColorSpace(.deviceRGB) ?? actual, p = garmentPaint(base)
+        return SKColor(red: clamp(a.redComponent / p.redComponent, 0, 1), green: clamp(a.greenComponent / p.greenComponent, 0, 1),
+                       blue: clamp(a.blueComponent / p.blueComponent, 0, 1), alpha: 1)
+    }
+
+    /// Garment panel variants (all authored at 64x96, anchor-agnostic; top of texture = top of the part).
+    enum Panel: Int { case torso = 0, trouser, shin, robe, plates, shoulder, strip }
+
+    /// Tapered polygon cloth panel with broad folds: one dark crease, one midtone, one narrow lit edge.
+    static func clothPanel(_ base: SKColor, variant: Int) -> SKTexture {
+        paint("cloth\(variant)_\(colorKey(base))", 64, 96) { c in
+            let chroma = rgba(garmentPaint(base))
+            // Silhouette outline (x at top, x at bottom), y from 0 (bottom) to 96 (top)
+            let p = CGMutablePath()
+            switch Panel(rawValue: variant) ?? .torso {
+            case .torso:     // broad chest tapering to a 0.76 waist
+                p.move(to: CGPoint(x: 7.7, y: 0)); p.addLine(to: CGPoint(x: 0, y: 70)); p.addQuadCurve(to: CGPoint(x: 10, y: 96), control: CGPoint(x: 0, y: 92))
+                p.addLine(to: CGPoint(x: 54, y: 96)); p.addQuadCurve(to: CGPoint(x: 64, y: 70), control: CGPoint(x: 64, y: 92)); p.addLine(to: CGPoint(x: 56.3, y: 0))
+            case .trouser:   // full at the hip, baggy at the knee, gathered just above it
+                p.move(to: CGPoint(x: 4, y: 96)); p.addLine(to: CGPoint(x: 60, y: 96))
+                p.addQuadCurve(to: CGPoint(x: 56, y: 8), control: CGPoint(x: 70, y: 40)); p.addLine(to: CGPoint(x: 10, y: 4))
+                p.addQuadCurve(to: CGPoint(x: 4, y: 96), control: CGPoint(x: -6, y: 50))
+            case .shin:      // narrowing lower leg with a lit cuff hem
+                p.move(to: CGPoint(x: 6, y: 96)); p.addLine(to: CGPoint(x: 58, y: 96)); p.addLine(to: CGPoint(x: 50, y: 0)); p.addLine(to: CGPoint(x: 14, y: 0))
+            case .robe:      // long split robe panel, flaring at the hem
+                p.move(to: CGPoint(x: 10, y: 96)); p.addLine(to: CGPoint(x: 54, y: 96)); p.addLine(to: CGPoint(x: 64, y: 0)); p.addLine(to: CGPoint(x: 0, y: 0))
+            case .plates:    // segmented chitin: drawn as stacked tapering plates below
+                p.addRect(CGRect(x: 0, y: 0, width: 0, height: 0))
+            case .shoulder:  // asymmetric pauldron / shoulder drape
+                p.move(to: CGPoint(x: 0, y: 96)); p.addLine(to: CGPoint(x: 64, y: 96)); p.addQuadCurve(to: CGPoint(x: 40, y: 0), control: CGPoint(x: 66, y: 30))
+                p.addLine(to: CGPoint(x: 16, y: 18)); p.addQuadCurve(to: CGPoint(x: 0, y: 96), control: CGPoint(x: 0, y: 50))
+            case .strip:     // scarf / cape strip, tapering tail
+                p.move(to: CGPoint(x: 6, y: 96)); p.addLine(to: CGPoint(x: 58, y: 96)); p.addLine(to: CGPoint(x: 44, y: 0)); p.addLine(to: CGPoint(x: 26, y: 6))
+            }
+            p.closeSubpath()
+            if variant == Panel.plates.rawValue {
+                for i in 0..<4 {   // overlapping plates, each narrower than the one above
+                    let y = CGFloat(72 - i * 24), inset = CGFloat(i) * 4
+                    let r = CGRect(x: inset, y: y - 2, width: 64 - inset * 2, height: 28)
+                    c.setFillColor(chroma); c.fill(r)
+                    c.setFillColor(CGColor(gray: 0, alpha: 0.42)); c.fill(CGRect(x: r.minX, y: r.minY, width: r.width, height: 5))
+                    c.setFillColor(CGColor(gray: 1, alpha: 0.35)); c.fill(CGRect(x: r.minX + 4, y: r.maxY - 3, width: r.width - 8, height: 2))
+                }
+                return
+            }
+            c.addPath(p); c.setFillColor(chroma); c.fillPath()
+            c.saveGState(); c.addPath(p); c.clip()
+            // midtone: broad shadow over the back half
+            c.setFillColor(CGColor(gray: 0, alpha: 0.18)); c.fill(CGRect(x: 36, y: 0, width: 28, height: 96))
+            // one dark crease (diagonal fold)
+            c.setStrokeColor(CGColor(gray: 0, alpha: 0.42)); c.setLineWidth(5)
+            c.move(to: CGPoint(x: 40, y: 92)); c.addQuadCurve(to: CGPoint(x: 30, y: 4), control: CGPoint(x: 26, y: 50)); c.strokePath()
+            // one narrow lit edge (front/leading side)
+            c.setFillColor(CGColor(gray: 1, alpha: 0.38)); c.fill(CGRect(x: 0, y: 0, width: 7, height: 96))
+            switch Panel(rawValue: variant) ?? .torso {
+            case .shin:   // cuff hem
+                c.setFillColor(CGColor(gray: 1, alpha: 0.3)); c.fill(CGRect(x: 0, y: 0, width: 64, height: 9))
+                c.setFillColor(CGColor(gray: 0, alpha: 0.35)); c.fill(CGRect(x: 0, y: 9, width: 64, height: 3))
+            case .trouser:  // gathered fold above the knee
+                c.setFillColor(CGColor(gray: 0, alpha: 0.3)); c.fill(CGRect(x: 0, y: 4, width: 64, height: 6))
+            case .torso:  // neckline + chest fold
+                c.setFillColor(CGColor(gray: 0, alpha: 0.3)); c.fillEllipse(in: CGRect(x: 20, y: 86, width: 24, height: 18))
+            case .robe:   // centre split
+                c.setFillColor(CGColor(gray: 0, alpha: 0.5)); c.fill(CGRect(x: 30, y: 0, width: 4, height: 60))
+            case .shoulder, .strip:
+                c.setFillColor(CGColor(gray: 0, alpha: 0.3)); c.fill(CGRect(x: 0, y: 0, width: 64, height: 10))
+            case .plates: break
+            }
+            c.restoreGState()
+        }
+    }
+
+    /// Boot (32x48), toe pointing +x (character forward); flared top cuff, dark sole.
+    static func boot(_ base: SKColor) -> SKTexture {
+        paint("boot_\(colorKey(base))", 32, 48) { c in
+            let chroma = rgba(garmentPaint(base))
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: 0, y: 48)); p.addLine(to: CGPoint(x: 32, y: 48)); p.addLine(to: CGPoint(x: 26, y: 18))
+            p.addQuadCurve(to: CGPoint(x: 32, y: 6), control: CGPoint(x: 32, y: 14)); p.addLine(to: CGPoint(x: 32, y: 0))
+            p.addLine(to: CGPoint(x: 2, y: 0)); p.addLine(to: CGPoint(x: 5, y: 30)); p.closeSubpath()
+            c.addPath(p); c.setFillColor(chroma); c.fillPath()
+            c.saveGState(); c.addPath(p); c.clip()
+            c.setFillColor(CGColor(gray: 0, alpha: 0.22)); c.fill(CGRect(x: 18, y: 0, width: 14, height: 48))
+            c.setFillColor(CGColor(gray: 1, alpha: 0.32)); c.fill(CGRect(x: 0, y: 40, width: 32, height: 4))      // cuff edge
+            c.setFillColor(CGColor(gray: 0, alpha: 0.4)); c.fill(CGRect(x: 0, y: 36, width: 32, height: 3))
+            c.setFillColor(CGColor(gray: 0, alpha: 0.75)); c.fill(CGRect(x: 0, y: 0, width: 32, height: 4))       // sole
+            c.restoreGState()
+        }
+    }
+
+    /// Health pip (24x32): faceted gem, white so the HUD can tint it.
+    static func healthPip() -> SKTexture {
+        paint("healthPip", 24, 32) { c in
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: 12, y: 31)); p.addLine(to: CGPoint(x: 23, y: 18)); p.addLine(to: CGPoint(x: 12, y: 1)); p.addLine(to: CGPoint(x: 1, y: 18)); p.closeSubpath()
+            c.addPath(p); c.setFillColor(CGColor(gray: 1, alpha: 1)); c.fillPath()
+            c.saveGState(); c.addPath(p); c.clip()
+            c.setFillColor(CGColor(gray: 0, alpha: 0.35)); c.fill(CGRect(x: 12, y: 0, width: 12, height: 32))
+            c.setFillColor(CGColor(gray: 1, alpha: 0.9)); c.fillEllipse(in: CGRect(x: 6, y: 18, width: 5, height: 7))
+            c.restoreGState()
+            c.addPath(p); c.setStrokeColor(CGColor(gray: 0, alpha: 0.8)); c.setLineWidth(1.5); c.strokePath()
+        }
+    }
+
+    /// Potion flask (32x48): red restores, green raises max health. Distinct silhouettes too.
+    static func potion(growth: Bool) -> SKTexture {
+        paint("potion\(growth)", 32, 48) { c in
+            let liquid = growth ? CGColor(red: 0.25, green: 0.9, blue: 0.35, alpha: 1) : CGColor(red: 0.9, green: 0.12, blue: 0.15, alpha: 1)
+            let body = growth ? CGRect(x: 6, y: 2, width: 20, height: 28) : CGRect(x: 4, y: 2, width: 24, height: 24)
+            c.setFillColor(CGColor(gray: 0.85, alpha: 0.45)); c.fill(CGRect(x: 12, y: body.maxY - 2, width: 8, height: growth ? 12 : 14))   // neck
+            c.setFillColor(CGColor(red: 0.45, green: 0.3, blue: 0.18, alpha: 1)); c.fill(CGRect(x: 11, y: growth ? 40 : 38, width: 10, height: 6))  // cork
+            if growth { c.addPath(CGPath(roundedRect: body, cornerWidth: 6, cornerHeight: 6, transform: nil)) } else { c.addEllipse(in: body) }
+            c.setFillColor(liquid); c.fillPath()
+            c.setFillColor(CGColor(gray: 0, alpha: 0.3)); c.fill(CGRect(x: body.midX, y: body.minY, width: body.width / 2, height: body.height))
+            c.setFillColor(CGColor(gray: 1, alpha: 0.75)); c.fillEllipse(in: CGRect(x: body.minX + 4, y: body.maxY - 10, width: 4, height: 6))
+        }
+    }
+
     /// Torch with flame + embers emitters and a flickering SKLightNode (normal-mapped stone reacts).
     static func torch(light color: SKColor) -> SKNode {
         let n = SKNode()
