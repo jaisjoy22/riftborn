@@ -29,3 +29,11 @@ Session:        20261013_125228_441042
 Title:          Implement Riftborn directional combat
 Duration:       15m 45s
 Messages:       99 (1 user, 97 tool calls)
+PHASE 4 VERIFIED + PUSHED (f9a8d8f)
+=== PHASE 5. Spawn staging and bounded HUD ===
+  hermes -c "Implement spawn staging and bounded HUD"
+
+Session:        20261013_130834_e87801
+Title:          Implement spawn staging and bounded HUD
+Duration:       22m 16s
+Messages:       59 (2 user, 56 tool calls)
