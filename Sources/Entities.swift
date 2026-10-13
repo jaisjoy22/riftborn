@@ -264,7 +264,7 @@ final class Being: Body {
     let tint: SKColor
     let hpBar = SKSpriteNode(color: .red, size: CGSize(width: 30, height: 3))
     let nameTag: SKLabelNode
-    private var cur = Pose.guardStance, runPhase: CGFloat = 0, clock: CGFloat = CGFloat.random(in: 0...10)
+    private var cur = Pose.guardStance, runPhase: CGFloat = 0, clock: CGFloat = Art.vrand(0...10)
     var onWhoosh: (() -> Void)?
 
     // PoP guard skill tables (data.h), 0-255 per skill level, sampled at PoP's 12 Hz AI tick.

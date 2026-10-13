@@ -22,11 +22,13 @@ final class Input {
     static let shared = Input()
     var keys = Set<UInt16>()
     var synthetic = Set<Act>()          // used by --selftest autopilot
+    var suppressHardware = false        // test fixtures: ignore keyboard + controllers entirely
     private var now = Set<Act>(), prev = Set<Act>()
 
     func poll() {
         prev = now
         var s = synthetic
+        if suppressHardware { now = s; return }
         func k(_ codes: UInt16...) -> Bool { codes.contains { keys.contains($0) } }
         if k(0, 123) { s.insert(.left) }
         if k(2, 124) { s.insert(.right) }

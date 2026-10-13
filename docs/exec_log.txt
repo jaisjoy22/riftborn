@@ -1,0 +1,7 @@
+=== PHASE 1. Baseline and deterministic harness ===
+  hermes -c "Implement Riftborn baseline harness"
+
+Session:        20261013_115508_f330eb
+Title:          Implement Riftborn baseline harness
+Duration:       14m 30s
+Messages:       96 (1 user, 94 tool calls)

@@ -5,6 +5,12 @@ import CoreGraphics
 /// normal maps from them so SKLightNode torches cast real per-pixel lighting (the "remaster" look).
 enum Art {
     static var cache: [String: SKTexture] = [:]
+    /// Seeded visual-randomness stream for deterministic test/snapshot sessions (nil = system random).
+    static var visRng: RNG?
+    static func vrand(_ r: ClosedRange<CGFloat>) -> CGFloat {
+        guard visRng != nil else { return CGFloat.random(in: r) }
+        return r.lowerBound + (r.upperBound - r.lowerBound) * CGFloat(visRng!.unit())
+    }
 
     /// Fast Sobel normal map from luminance (replaces SKTexture.generatingNormalMap, which is serial and slow).
     /// Thread-safe pure function; returns an RGBA image where rgb = packed normal.
@@ -185,7 +191,7 @@ enum Art {
         light.ambientColor = .clear; light.shadowColor = SKColor(white: 0, alpha: 0.5)
         n.addChild(light)
         let flicker = SKAction.customAction(withDuration: 0.12) { _, _ in
-            let f = CGFloat.random(in: 1.35...1.8); light.falloff = f; halo.alpha = 0.16 + (1.8 - f) * 0.3
+            let f = Art.vrand(1.35...1.8); light.falloff = f; halo.alpha = 0.16 + (1.8 - f) * 0.3
         }
         n.run(.repeatForever(.sequence([flicker, .wait(forDuration: 0.05)])))
         return n

@@ -2,7 +2,20 @@ import SpriteKit
 
 /// The rift: one procedurally generated depth. Owns entities, combat, dialogue, HUD and the portal.
 final class GameScene: SKScene {
-    var chron = Chronicle.load()
+    /// Test sessions (fixtures/v3 selftest) use an in-memory Chronicle and never touch the user's save.
+    var isTestSession = false
+    private(set) var loadedFromDisk = false, persistCount = 0
+    lazy var chron: Chronicle = {
+        if isTestSession { return Chronicle() }
+        loadedFromDisk = true
+        return Chronicle.load()
+    }()
+    /// Optional fixture layout hook: runs on the freshly generated World before baking/spawning.
+    var fixtureLayout: ((World) -> Void)?
+    /// When set, visual-only randomness (shake, sparks, slash angle) is drawn from this seeded stream.
+    var visRng: RNG?
+    /// Freezes the live update loop (and actions) so a snapshot captures a settled, deterministic frame.
+    var simFrozen = false
     var world: World!
     var theme: Theme!
     var rng = RNG(1)
@@ -116,12 +129,16 @@ final class GameScene: SKScene {
         pruneSouls()
         backgroundColor = theme.sky
         world = Prof.time("worldgen") { World(seed: chron.seed, depth: chron.depth) }
+        if let layout = fixtureLayout { layout(world) }
         torchSpots = world.torchSpots()
         worldNode.addChild(Prof.time("bake tiles") { world.buildNode(theme: theme, lights: torchSpots) })
         worldNode.addChild(parallaxMid)
         Prof.time("parallax") { addParallax() }
         Prof.time("lighting") { addLighting() }
-        if let s = synth { s.reseed(&rng) }
+        if let s = synth {
+            // Test sessions must not let audio presence perturb the simulation RNG stream.
+            if isTestSession { var r2 = rng; s.reseed(&r2) } else { s.reseed(&rng) }
+        }
 
         player = Player(pos: CGPoint(x: (CGFloat(world.start.x) + 0.5) * T, y: CGFloat(world.start.y) * T))
         player.maxHP = CGFloat(chron.maxHP); player.hp = player.maxHP
@@ -202,7 +219,29 @@ final class GameScene: SKScene {
         title.alpha = 1; title.run(.sequence([.wait(forDuration: 4), .fadeAlpha(to: 0.35, duration: 1.5)]))
         layoutHUD()
         say(chron.depth == 1 && chron.log.isEmpty ? "A rift opens. Every soul here remembers." : "Mutator: \(chron.mutator)")
+        saveChronicle()
+    }
+
+    /// Single persistence choke point: test sessions never write the production save.
+    func saveChronicle() {
+        guard !isTestSession else { return }
+        persistCount += 1
         chron.save()
+    }
+
+    /// Enter an isolated test session with an in-memory Chronicle. Call before `setup()`.
+    func beginTestSession(seed: UInt64, depth: Int = 1) {
+        isTestSession = true
+        var c = Chronicle(); c.seed = seed; c.depth = depth
+        chron = c
+        visRng = RNG(seed ^ 0x5649_5355_414C)
+        Art.visRng = RNG(seed ^ 0x4152_5456_4953)
+    }
+
+    /// Visual-only random value; deterministic in test sessions.
+    func vrand(_ r: ClosedRange<CGFloat>) -> CGFloat {
+        guard visRng != nil else { return CGFloat.random(in: r) }
+        return r.lowerBound + (r.upperBound - r.lowerBound) * CGFloat(visRng!.unit())
     }
 
     func addParallax() {
@@ -305,6 +344,7 @@ final class GameScene: SKScene {
     // MARK: Loop
 
     override func update(_ currentTime: TimeInterval) {
+        if simFrozen { isPaused = true; return }
         let dt = lastTime == 0 ? 1.0 / 60 : min(1.0 / 30, currentTime - lastTime)
         lastTime = currentTime
         tick(CGFloat(dt))
@@ -349,8 +389,8 @@ final class GameScene: SKScene {
         camBase.y = clamp(camBase.y, halfH, max(halfH, maxY - halfH))
         // Directional, decaying shake (biased along the hit direction)
         shake *= 0.86; if shake < 0.2 { shake = 0 }
-        let sx = shake > 0 ? CGFloat.random(in: -shake...shake) * 0.5 + shakeDir * shake * 0.6 : 0
-        let sy = shake > 0 ? CGFloat.random(in: -shake...shake) * 0.6 : 0
+        let sx = shake > 0 ? vrand(-shake...shake) * 0.5 + shakeDir * shake * 0.6 : 0
+        let sy = shake > 0 ? vrand(-shake...shake) * 0.6 : 0
         cam.position = CGPoint(x: camBase.x + sx * zoom, y: camBase.y + sy * zoom)
         cam.setScale(zoom * (1 + zoomPunch)); zoomPunch *= 0.88
         // Camera children already scale with the camera, so the HUD keeps a constant on-screen size as-is.
@@ -372,7 +412,7 @@ final class GameScene: SKScene {
         synth?.sfxHit = heavy ? 1.6 : 1
         // Slash flash
         let slash = SKSpriteNode(texture: Art.spark, size: CGSize(width: heavy ? 150 : 100, height: heavy ? 18 : 12))
-        slash.position = p; slash.zRotation = CGFloat.random(in: -0.6...0.6); slash.blendMode = .add; slash.zPosition = 40
+        slash.position = p; slash.zRotation = vrand(-0.6...0.6); slash.blendMode = .add; slash.zPosition = 40
         worldNode.addChild(slash)
         slash.run(.sequence([.group([.scaleX(to: 1.6, duration: 0.12), .fadeOut(withDuration: 0.14)]), .removeFromParent()]))
         // Sparks + blood
@@ -570,7 +610,7 @@ final class GameScene: SKScene {
             line += "\n\n\(k.soul.name) grows stronger from your death.\nThey will remember this."
             chron.note("\(k.soul.name) slew the rift-walker and rose to level \(k.soul.level).")
         }
-        chron.save()
+        saveChronicle()
         showPanel(line + "\n\n[Space] Rise again")
     }
 
@@ -671,7 +711,7 @@ final class GameScene: SKScene {
             else if hostile { b.role = .hostile; b.talked = true }
             else if b.role == .hostile { b.role = .fleeing }
         }
-        b.restyle(); writeBack(b); chron.save()
+        b.restyle(); writeBack(b); saveChronicle()
         showPanel(reply)
         mode = .play; talkingTo = nil
         panel.run(.sequence([.wait(forDuration: 3.0), .hide()]))
@@ -685,7 +725,7 @@ final class GameScene: SKScene {
         if let p = unknown.first(where: { _ in true }).map({ _ in unknown[rng.int(unknown.count)] }) {
             chron.powers.append(p); flash("Learned: \(p)  [Q] cast  [R] cycle")
         } else { chron.power += 4; flash("The shrine sharpens your blade (+4 power)") }
-        player.hp = player.maxHP; chron.save()
+        player.hp = player.maxHP; saveChronicle()
     }
 
     func openChest(_ i: Int) {
@@ -754,7 +794,7 @@ final class GameScene: SKScene {
         for _ in 0..<6 {
             let s = SKSpriteNode(color: color, size: CGSize(width: 4, height: 4))
             s.position = p; s.zPosition = 20; worldNode.addChild(s)
-            s.run(.sequence([.group([.moveBy(x: CGFloat.random(in: -40...40), y: CGFloat.random(in: -10...50), duration: 0.35), .fadeOut(withDuration: 0.35)]), .removeFromParent()]))
+            s.run(.sequence([.group([.moveBy(x: vrand(-40...40), y: vrand(-10...50), duration: 0.35), .fadeOut(withDuration: 0.35)]), .removeFromParent()]))
         }
     }
 
