@@ -154,6 +154,7 @@ final class GameScene: SKScene {
         player = Player(pos: CGPoint(x: (CGFloat(world.start.x) + 0.5) * T, y: CGFloat(world.start.y) * T))
         player.maxHP = CGFloat(chron.maxHP); player.hp = player.maxHP
         player.onWhoosh = { [weak self] in self?.synth?.sfxWhoosh = (self?.player.attackKind == .overhead) ? 1.5 : 1 }
+        player.onTraversal = { [weak self] cue, s in self?.traversalCues += 1; self?.synth?.cue(cue, strength: s) }
         worldNode.addChild(player.node)
         camBase = CGPoint(x: player.pos.x, y: player.pos.y + 70)
 
@@ -448,6 +449,15 @@ final class GameScene: SKScene {
         }
     }
 
+    // v3 §7 audio situation: forwarded to the synth only when the encounter / low-HP state changes.
+    var audioCombat = false, audioLowHP = false, situationChanges = 0, traversalCues = 0
+    func updateAudioSituation(combat: Bool) {
+        let low = Synth.lowHPState(wasLow: audioLowHP, fraction: player.maxHP > 0 ? player.hp / player.maxHP : 0)
+        guard combat != audioCombat || low != audioLowHP else { return }
+        audioCombat = combat; audioLowHP = low; situationChanges += 1
+        synth?.setSituation(combat: combat, lowHP: low)
+    }
+
     func play(_ dt0: CGFloat) {
         // Brief slow-mo after kills / perfect parries (time dilation, like Sands of Time's flourish)
         slowMoT = max(0, slowMoT - Double(dt0))
@@ -618,6 +628,7 @@ final class GameScene: SKScene {
 
         updateBolts(dt)
         synth?.targetIntensity = anyAggro ? 1 : (chron.mutator == "Maddening Depths" ? 0.35 : 0)
+        updateAudioSituation(combat: anyAggro)
 
         // Interact: talk to the nearest being in range, shrine, chest, portal
         let near = beings.filter { !$0.dead && $0.role != .fleeing && hypot($0.pos.x - player.pos.x, $0.pos.y - player.pos.y) < 90 }

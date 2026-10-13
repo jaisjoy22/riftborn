@@ -198,6 +198,7 @@ func selfTest() -> Int32 {
     runV3Tests(&failures)
     runV3CombatTests(&failures)
     runV3EnvTests(&failures)
+    runV3AudioTests(&failures)
 
     print("""
     RIFTBORN SELFTEST
@@ -404,13 +405,25 @@ func runV3Tests(_ failures: inout [String]) {
 }
 
 func audioTest() -> Int32 {
+    // Offline first (engine stopped): every cue, stacked impacts, low-HP transitions.
+    var failures: [String] = []
+    runV3AudioTests(&failures)
     let s = Synth()
     s.start()
     print("audio engine running:", s.engine.isRunning, "sampleRate:", s.engine.outputNode.outputFormat(forBus: 0).sampleRate)
     s.targetIntensity = 1
-    Thread.sleep(forTimeInterval: 0.5)
+    // Live handoff stress: game-thread writes while the callback renders; the callback never waits.
+    let end = Date().addingTimeInterval(0.5)
+    var i = 0
+    while Date() < end {
+        s.cue(TraversalCue.allCases[i % TraversalCue.allCases.count]); s.sfxHit = 1; s.sfxClang = 1
+        s.setSituation(combat: i % 200 < 100, lowHP: i % 400 < 200)
+        i += 1; Thread.sleep(forTimeInterval: 0.002)
+    }
     s.engine.stop()
-    return s.engine.isRunning ? 1 : 0
+    if s.engine.isRunning { failures.append("audio engine did not stop") }
+    print("audiotest result :", failures.isEmpty ? "PASS" : "FAIL " + failures.joined(separator: "; "))
+    return failures.isEmpty ? 0 : 1
 }
 
 if CommandLine.arguments.contains("--selftest") { exit(selfTest()) }

@@ -107,7 +107,16 @@ final class Player: Body {
     var attackKind = AttackKind.slash, bufferedKind = AttackKind.slash
     var recoilLock: Double = 0
     var comboGap = 1.0                 // gameplay seconds since the last attack ended (chain window)
-    var moveMode = MoveMode.free
+    var moveMode = MoveMode.free {
+        didSet {
+            guard moveMode != oldValue else { return }
+            if moveMode == .hang { onTraversal?(.grab, 1) } else if moveMode == .climb { onTraversal?(.climb, 1) }
+        }
+    }
+    /// v3 §7 foley hook (step/land/grab/climb/draw); wired once in `buildDepth()`.
+    var onTraversal: ((TraversalCue, Float) -> Void)?
+    var strideDist: CGFloat = 0
+    static let strideLength: CGFloat = 38
     private var capturedPoll: (ObjectIdentifier, Int)? = nil
     var swingId = 0
     var dashTimer = 0.0, dashCD = 0.0, invuln = 0.0
@@ -157,6 +166,7 @@ final class Player: Body {
         case .overhead: spec = .heavy
         }
         phase = .windup; phaseT = spec.windup
+        if comboGap >= 1.5 { onTraversal?(.draw, 1) }      // first strike after 1.5 s idle: blade scrape
         comboGap = 0
         swingId += 1
     }
@@ -271,11 +281,26 @@ final class Player: Body {
         }
         if !inp.held(.jump) && vel.dy > 300 && wallRunTime == 0 { vel.dy -= 2600 * dt }
 
-        let wasAir = !onGround, fallSpeed = vel.dy
+        let wasAir = !onGround, fallSpeed = vel.dy, x0 = pos.x
         step(dt, w)
         if wasAir && onGround && fallSpeed < -500 { landSquash = 0.12 }
+        emitFoley(wasAir: wasAir, fallSpeed: fallSpeed, dx: pos.x - x0)
 
         animate(dt, wallRunning: wallRunning)
+    }
+
+    /// Footsteps come only from grounded, actual displacement (blocked-against-wall moves ~0) and from
+    /// air->ground contact crossings; never while hanging/climbing or airborne.
+    private func emitFoley(wasAir: Bool, fallSpeed: CGFloat, dx: CGFloat) {
+        guard moveMode == .free, onGround else { if !onGround { strideDist = Player.strideLength * 0.5 }; return }
+        if wasAir {
+            if fallSpeed < -260 { onTraversal?(.land, Float(clamp((-fallSpeed - 260) / 1100 + 0.35, 0.35, 1))) }
+            else { onTraversal?(.step, 0.8) }
+            strideDist = 0; return
+        }
+        guard dashTimer == 0, abs(dx) > 0.05 else { return }
+        strideDist += abs(dx)
+        if strideDist >= Player.strideLength { strideDist -= Player.strideLength; onTraversal?(.step, Float(clamp(abs(vel.dx) / 300, 0.4, 1))) }
     }
 
     private func animate(_ dt: CGFloat, wallRunning: Bool) {
