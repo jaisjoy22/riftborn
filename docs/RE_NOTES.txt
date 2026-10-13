@@ -1,0 +1,41 @@
+What Riftborn borrows from Prince of Persia's reverse-engineered combat
+=====================================================================
+Source: SDLPoP (github.com/NagyD/SDLPoP, GPL-3), a C port rebuilt from the
+disassembly of PoP1 DOS by David Nagy. PoP2 (1993) reuses this sword engine.
+We study the DESIGN (timings, AI decision rules). No code, sprites, sounds or
+level data are copied; all Riftborn art/audio is generated procedurally.
+
+1. Strike = anticipation -> contact -> follow-through   (seqtbl.c, LABEL(strike))
+   PoP ticks at ~12 fps. Strike sequence:
+     168 back (wind-up) -> 151 strike_1 -> 152 strike_2 -> 153 strike_3 (contact)
+     -> 154 poking -> 155 guy_7 (bumped/recovery) -> 156 -> 157 -> ready
+   ~2 frames of wind-up, 1-2 frames of hurtbox, 3-4 frames recovery: recovery is
+   LONGER than wind-up. That asymmetry is why PoP hits feel committed/weighty.
+   Blocked strike (167 blocked) jumps straight into guy_7 recovery: being
+   parried costs the attacker tempo.
+   strikeadv / advance carry forward dx(2..6) per frame: the body lunges.
+
+2. Guard AI = distance bands + per-skill probability tables (seg002.c, data.h)
+   autocontrol_guard_kid_armed(distance):
+     distance < 10 or >= 29  -> guard_advance()   (close the gap / back off)
+     10..29                  -> guard_block(), then guard_strike() if not refractory
+   guard_block: ONLY reacts when the opponent is in strike_2/strike_3 frames
+     (the readable telegraph) with blockprob, or impblockprob right after a block.
+   guard_strike: strikeprob normally, restrikeprob right after a successful parry
+     (riposte). guard_refrac: cooldown after being hit (refractimer ticks).
+   Tables (0-255 per skill 0..11):
+     strikeprob   61,100,61,61,61,40,100,220,0,48,32,48
+     restrikeprob  0,0,0,5,5,175,16,8,0,255,255,150
+     blockprob     0,150,150,200,200,255,200,250,0,255,255,255
+     impblockprob  0,61,61,100,100,145,100,250,0,145,255,175
+     advprob     255,200,200,200,255,255,200,0,0,255,100,100
+     refractimer  16,16,16,16,8,8,8,8,0,8,0,0
+
+How Riftborn uses it
+   - Player and enemy attacks use explicit windup/active/recovery phases with the
+     PoP ratio, forward lunge during active frames, and parry -> attacker
+     recovery + defender riposte window.
+   - Enemy duelists use the band logic and probability tables above, indexed by a
+     skill derived from depth + soul level, scaled from 12 fps ticks to seconds.
+   - Added modern "game feel" layers PoP did not have: hit-stop, directional
+     shake, white hit-flash, knockback, sword trails, layered impact SFX.

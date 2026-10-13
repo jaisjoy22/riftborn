@@ -1,0 +1,75 @@
+RIFTBORN v3 — PLANNING BRIEF
+============================
+Project root: /Users/jaisjoy/Development/repos/reaagents/riftborn   (git repo; checkpoint commit 1fc69b5)
+Machine: Apple M1 (4P+4E cores, 8-core GPU), 16 GB, macOS 26, Swift 6.3 via Command Line Tools ONLY
+(no Xcode, no offline Metal compiler, no SDL/Homebrew deps). Native arm64. Build: ./build.sh
+Language mode: swiftc -swift-version 5 -O -wmo. Frameworks: AppKit, SpriteKit, AVFoundation, GameController.
+
+WHAT THE USER ASKED FOR (verbatim intent)
+- "near 1:1 replication of Prince of Persia 2 inspired graphics, essentially a PS4 graphics update"
+- "sound is good, can be more fine tuned"
+- "the controls, especially attack and blow should feel like attacks"
+- "reverse engineer the native binaries of the games that have been reversed to our advantage —
+   understand how those AAA games produce excellent games and incorporate it into Riftborn"
+- Earlier vision: PoP 2/3 movement + Diablo dungeons/enemies + StarCraft factions; endless exploration;
+  consequences of choices; NPCs with gravity/story; progression unbounded; Skrillex-style modern
+  techno/house/dubstep soundtrack.
+
+HARD CONSTRAINTS
+- Original game. No copyrighted assets, sprites, sounds, level data, or code copied from any game.
+  Study DESIGN only (timings, AI rules, rendering techniques). All art/audio stays procedural.
+- Must stay 60 fps on the M1 at 1440x900 window (currently verified 60 fps with --fpslog).
+- Level build ("buildDepth") must stay well under 200 ms (currently ~110 ms).
+- `--selftest` must keep passing (autopilot through 10 depths + combat-phase contract + duel harness).
+- No new external dependencies.
+
+FILES (Sources/)
+  Core.swift      RNG, Input (keyboard+GCController, `synthetic` set for tests), Theme, helpers
+  Mind.swift      Chronicle save (souls, rep, mercy/cruelty, nemesis), dialogue, motives, prophecy
+  World.swift     procedural rooms/ledges/spikes; buildNode() bakes 16x16-tile chunks in parallel
+                  (CoreGraphics: back wall, AO, masonry, ledges, spikes, BAKED torch light pools)
+  Art.swift       procedural textures (stone, backWall, sky, glow, vignette, spark, torch emitter),
+                  Sobel normalMap() (currently unused after switching to baked light)
+  Rig.swift       bone-hierarchy character rig, keyframe Pose library + lerp, keylines, sword trail
+  Entities.swift  Body physics, AttackSpec (windup/active/recovery), Player state machine,
+                  Being AI using PoP guard tables, Bolt
+  GameScene.swift scene, camera (zoom 480 world-units tall, clamped), hit-stop, impact FX, damage,
+                  parry/block, dialogue, portals/mutators, HUD, light pool (6 SKLightNodes follow camera)
+  Synth.swift     realtime procedural music (128 house <-> 140 half-time dubstep) + SFX
+                  (hit, zap, death, portal, whoosh, clang, thump, sidechain duck)
+  Prof.swift      RIFTBORN_PROFILE=1 timings
+  main.swift      app, --selftest, --audiotest, --snapshot <png>, --fpslog, --mute, --reset
+  docs/RE_NOTES.txt  what was learned from SDLPoP (reverse-engineered PoP1 DOS, GPL-3)
+
+RE FINDINGS ALREADY APPLIED (from SDLPoP seqtbl.c / seg002.c / data.h)
+- Strike sequence 168 back -> 151/152/153 strike -> 154 poke -> 155-157 recovery: recovery > windup.
+- Blocked strike drops attacker into long recovery; parried defender may riposte (restrikeprob).
+- Guard AI: distance bands (<10 or >=29 advance; 10..29 block-then-strike), probability tables
+  strikeprob/restrikeprob/blockprob/impblockprob/advprob/refractimer per skill, 12 Hz AI tick.
+- Additional AAA feel layers added: hit-stop, directional shake, zoom punch, white flash, knockback,
+  sword trails, damage numbers, slow-mo on kill/parry, layered impact SFX, music sidechain.
+
+KNOWN PROBLEMS (from vision review of in-game snapshots /tmp/riftborn_before.png)
+1. Characters read as "capsule mannequins": need silhouette detail (flowing pants/robes, cloth
+   secondary motion, scarf, cape), better proportions, PoP2's rotoscoped fluidity (more poses/
+   in-betweens: run cycle w/ contact/passing/up, turn, landing, ledge grab/climb).
+2. No ledge GRAB/HANG/CLIMB — the single most iconic PoP2 mechanic. Also no careful step, no
+   crouch, no running jump distinction.
+3. Platforms read as thin trim; need thick slab front faces; background vs gameplay layer contrast.
+4. Visible chunk/brick variant seams were reported; baked light pools just added (verify).
+5. HUD: needs PoP-style health (triangle/flask pips) + enemy health on opposite corner; nameplates
+   overlap/clip at screen edges.
+6. Enemies spawn overlapping; nameplates collide.
+7. Environment lacks PoP2 set dressing: pillars with capitals, gates/portcullis, pressure plates,
+   loose floor tiles that crumble, chompers/blades, skeletons, potions (red heal, green grow-max-hp),
+   exit door. These are also gameplay.
+8. Sound: fine-tune mix (levels/EQ), add footsteps, ledge grunt, sword draw, better kick/snare,
+   reverb tail; music should react (combat stinger, low-HP filter).
+9. Attack feel: verify inputs feel immediate (input buffering exists), add directional attacks
+   (overhead / thrust), guard-break heavy, enemy hit-reaction variety, death animation ragdoll-ish.
+
+DELIVERABLE FROM PLANNER
+A concrete, ordered, file-by-file implementation plan the executor can follow without asking
+questions: phases, exact functions/types to add or change, tuning numbers, acceptance checks
+(selftest assertions to add, snapshot criteria), and risk notes. Prioritize the highest
+player-visible impact per hour. Keep it implementable in one session (~3-4k lines of change max).
