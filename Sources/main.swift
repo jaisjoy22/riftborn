@@ -5,7 +5,13 @@ final class GameView: SKView {
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with e: NSEvent) { Input.shared.keys.insert(e.keyCode) }
     override func keyUp(with e: NSEvent) { Input.shared.keys.remove(e.keyCode) }
-    override func flagsChanged(with e: NSEvent) {}
+    override func flagsChanged(with e: NSEvent) {
+        // Shift keys arrive only as modifier changes; mirror them into the key set as keycodes 56/60.
+        guard e.keyCode == 56 || e.keyCode == 60 else { return }
+        if !e.modifierFlags.contains(.shift) { Input.shared.keys.remove(56); Input.shared.keys.remove(60) }
+        else if Input.shared.keys.contains(e.keyCode) { Input.shared.keys.remove(e.keyCode) }
+        else { Input.shared.keys.insert(e.keyCode) }
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

@@ -16,13 +16,15 @@ struct RNG {
     mutating func pick<E>(_ a: [E]) -> E { a[int(a.count)] }
 }
 
-enum Act: Hashable { case left, right, up, down, jump, attack, dash, block, talk, power, opt1, opt2, opt3, cycle, pause }
+enum Act: Hashable { case left, right, up, down, jump, attack, dash, block, talk, power, opt1, opt2, opt3, cycle, pause, careful }
 
 final class Input {
     static let shared = Input()
     var keys = Set<UInt16>()
     var synthetic = Set<Act>()          // used by --selftest autopilot
     var suppressHardware = false        // test fixtures: ignore keyboard + controllers entirely
+    /// Plan-v3 spelling of `suppressHardware` (same storage).
+    var suppressesHardware: Bool { get { suppressHardware } set { suppressHardware = newValue } }
     private var now = Set<Act>(), prev = Set<Act>()
 
     func poll() {
@@ -45,6 +47,7 @@ final class Input {
         if k(53) { s.insert(.pause) }
         if k(15) { s.insert(.cycle) }
         if k(20) { s.insert(.opt3) }
+        if k(56, 60) { s.insert(.careful) }         // left/right Shift (fed by flagsChanged)
         if let g = GCController.current?.extendedGamepad {
             let x = g.leftThumbstick.xAxis.value, y = g.leftThumbstick.yAxis.value
             if x < -0.4 || g.dpad.left.isPressed { s.insert(.left) }
@@ -59,7 +62,7 @@ final class Input {
             if g.buttonB.isPressed { s.insert(.power) }
             if g.buttonMenu.isPressed { s.insert(.pause) }
             if g.rightTrigger.isPressed { s.insert(.cycle) }
-            if g.leftTrigger.isPressed { s.insert(.opt3) }
+            if g.leftTrigger.isPressed { s.insert(.opt3); s.insert(.careful) }   // opt3 in menus, careful in play
         }
         now = s
     }
