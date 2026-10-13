@@ -302,6 +302,68 @@ enum Art {
         }
     }
 
+    // MARK: Environment dressing (v3 §6)
+
+    /// Background column (32x160): plinth, fluted shaft, flared capital. Low contrast so it never reads as a platform.
+    static func pillar(_ base: SKColor) -> SKTexture {
+        paint("pillar" + colorKey(base), 32, 160) { c in
+            let stone = base.blended(withFraction: 0.18, of: .white) ?? base
+            let dark = base.blended(withFraction: 0.45, of: .black) ?? base
+            c.setFillColor(rgba(dark)); c.fill(CGRect(x: 2, y: 0, width: 28, height: 10))            // plinth
+            c.setFillColor(rgba(stone)); c.fill(CGRect(x: 4, y: 10, width: 24, height: 4))
+            c.setFillColor(rgba(stone)); c.fill(CGRect(x: 7, y: 14, width: 18, height: 124))         // shaft
+            for fx in [10, 15, 20] { c.setFillColor(CGColor(gray: 0, alpha: 0.22)); c.fill(CGRect(x: fx, y: 16, width: 2, height: 120)) }
+            c.setFillColor(CGColor(gray: 0, alpha: 0.28)); c.fill(CGRect(x: 18, y: 14, width: 7, height: 124))   // shaded side
+            c.setFillColor(rgba(stone)); c.fill(CGRect(x: 5, y: 138, width: 22, height: 5))          // necking
+            c.move(to: CGPoint(x: 5, y: 143)); c.addLine(to: CGPoint(x: 27, y: 143))                  // flared capital
+            c.addLine(to: CGPoint(x: 32, y: 152)); c.addLine(to: CGPoint(x: 0, y: 152)); c.closePath()
+            c.setFillColor(rgba(stone)); c.fillPath()
+            c.setFillColor(rgba(dark)); c.fill(CGRect(x: 0, y: 152, width: 32, height: 8))           // abacus
+            c.setFillColor(CGColor(gray: 1, alpha: 0.18)); c.fill(CGRect(x: 0, y: 158, width: 32, height: 2))
+        }
+    }
+
+    /// Stone exit arch (128x176) with keystone and open interior; wraps the portal.
+    static func exitFrame(_ base: SKColor) -> SKTexture {
+        paint("exitFrame" + colorKey(base), 128, 176) { c in
+            let stone = base.blended(withFraction: 0.35, of: .white) ?? base
+            let dark = base.blended(withFraction: 0.5, of: .black) ?? base
+            let outer = CGMutablePath()
+            outer.addRect(CGRect(x: 4, y: 0, width: 120, height: 118))
+            outer.addEllipse(in: CGRect(x: 4, y: 58, width: 120, height: 116))
+            c.addPath(outer); c.setFillColor(rgba(stone)); c.fillPath()
+            // carve the opening (even-odd hole)
+            c.setBlendMode(.clear)
+            c.fill(CGRect(x: 22, y: 0, width: 84, height: 112))
+            c.fillEllipse(in: CGRect(x: 22, y: 70, width: 84, height: 86))
+            c.setBlendMode(.normal)
+            c.setFillColor(CGColor(gray: 0, alpha: 0.3)); c.fill(CGRect(x: 96, y: 0, width: 10, height: 112))  // inner shadow jamb
+            for y in stride(from: 16, to: 112, by: 24) { c.setFillColor(CGColor(gray: 0, alpha: 0.35)); c.fill(CGRect(x: 4, y: y, width: 18, height: 2)); c.fill(CGRect(x: 106, y: y, width: 18, height: 2)) }
+            c.setFillColor(rgba(dark)); c.fill(CGRect(x: 0, y: 0, width: 128, height: 8))            // threshold
+            c.move(to: CGPoint(x: 54, y: 176)); c.addLine(to: CGPoint(x: 74, y: 176)); c.addLine(to: CGPoint(x: 70, y: 152)); c.addLine(to: CGPoint(x: 58, y: 152)); c.closePath()
+            c.setFillColor(rgba(base.blended(withFraction: 0.6, of: .white) ?? base)); c.fillPath()       // keystone
+        }
+    }
+
+    /// Portcullis lattice (32x64), tiled by stretching vertically.
+    static var gateBars: SKTexture {
+        paint("gateBars", 32, 64) { c in
+            for x in [2, 11, 20, 28] { c.setFillColor(CGColor(gray: 0.22, alpha: 1)); c.fill(CGRect(x: x, y: 0, width: 3, height: 64)) }
+            for y in [6, 30, 54] { c.setFillColor(CGColor(gray: 0.3, alpha: 1)); c.fill(CGRect(x: 0, y: y, width: 32, height: 3)) }
+            c.setFillColor(CGColor(gray: 0.6, alpha: 1)); for x in [2, 11, 20, 28] { c.fill(CGRect(x: x, y: 0, width: 1, height: 64)) }
+            c.setFillColor(CGColor(gray: 0.5, alpha: 1)); for x in [2, 11, 20, 28] { c.fill(CGRect(x: x, y: 0, width: 3, height: 4)) }   // spikes
+        }
+    }
+
+    /// Pressure plate (32x8): raised brass-edged slab.
+    static var plate: SKTexture {
+        paint("plate", 32, 8) { c in
+            c.setFillColor(CGColor(gray: 0.12, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: 32, height: 3))
+            c.setFillColor(CGColor(red: 0.62, green: 0.5, blue: 0.28, alpha: 1)); c.fill(CGRect(x: 2, y: 3, width: 28, height: 5))
+            c.setFillColor(CGColor(gray: 1, alpha: 0.35)); c.fill(CGRect(x: 2, y: 7, width: 28, height: 1))
+        }
+    }
+
     /// Torch with flame + embers emitters and a flickering SKLightNode (normal-mapped stone reacts).
     static func torch(light color: SKColor) -> SKNode {
         let n = SKNode()

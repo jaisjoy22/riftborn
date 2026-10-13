@@ -197,6 +197,7 @@ func selfTest() -> Int32 {
     // v3 deterministic fixtures (isolated scenes; run after the unchanged progression harness).
     runV3Tests(&failures)
     runV3CombatTests(&failures)
+    runV3EnvTests(&failures)
 
     print("""
     RIFTBORN SELFTEST
@@ -293,6 +294,7 @@ func prepareV3Fixture(_ scene: GameScene, _ fixture: V3Fixture) {
                         Spawn(kind: .wanderer, x: a.x0 + 14, y: a.y0)]
         case .props:
             w.spawns = [Spawn(kind: .shrine, x: a.x0 + 10, y: a.y0), Spawn(kind: .chest, x: a.x0 + 14, y: a.y0)]
+            addV3PropsDecor(w)
         }
     }
     scene.setup()

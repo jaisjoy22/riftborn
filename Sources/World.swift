@@ -4,6 +4,15 @@ enum Tile: UInt8 { case empty = 0, solid, spike, ledge /* one-way platform */ }
 
 struct Spawn { enum Kind { case enemy, wanderer, shrine, chest } ; let kind: Kind; let x: Int; let y: Int }
 
+/// Environmental dressing / interaction descriptor (v3 §6). `position` is bottom-center in world points.
+/// Gates use `link` as their own id; plates use `link` to address the gate they open.
+struct WorldProp: Equatable {
+    enum Kind: Equatable { case pillar, skeleton, healPotion, growthPotion, plate, gate, exitFrame }
+    let kind: Kind
+    var position: CGPoint
+    var link: Int? = nil
+}
+
 /// Procedural dungeon: a chain of rooms laid out in a winding path (Prince of Persia verticality,
 /// Diablo-style branching), with one-way ledges, spike pits, shrines, and a portal at the end.
 final class World {
@@ -12,6 +21,13 @@ final class World {
     var spawns: [Spawn] = []
     var start = (x: 3, y: 3)
     var portal = (x: 0, y: 0)
+    /// Visited room cells (room-grid coordinates), in generation order.
+    private(set) var rooms: [(x: Int, y: Int)] = []
+    static let roomW = 26, roomH = 22
+    /// Baked (pillar/skeleton) and live (potion/plate/gate/exit) decorations. Never affects tile collision.
+    var decor: [WorldProp] = []
+    /// Dynamic gate collision, keyed by gate id. Removed once a gate is raised clear of actor height.
+    var closedGateRects: [Int: CGRect] = [:]
 
     init(seed: UInt64, depth: Int) {
         var r = RNG(seed &+ UInt64(depth) &* 7919)
@@ -92,6 +108,125 @@ final class World {
         }
         // Make sure spawn spots are not inside solids
         spawns = spawns.filter { at($0.x, $0.y) == .empty }
+        self.rooms = cells.map { (x: $0.0, y: $0.1) }
+        placeDecor(seed: seed &+ UInt64(depth) &* 7919)
+    }
+
+    // MARK: Decoration / interaction placement (v3 §6)
+
+    static func gateRect(column gx: Int, floor fy: Int, tiles: Int) -> CGRect {
+        CGRect(x: CGFloat(gx) * T + 6, y: CGFloat(fy) * T, width: T - 12, height: CGFloat(max(1, tiles)) * T)
+    }
+
+    @inline(__always) static func overlaps(_ a: CGRect, _ b: CGRect) -> Bool {
+        a.minX < b.maxX - 0.001 && a.maxX > b.minX + 0.001 && a.minY < b.maxY - 0.001 && a.maxY > b.minY + 0.001
+    }
+
+    /// True when `r` overlaps a closed gate.
+    func gateBlocks(_ r: CGRect) -> Bool {
+        if closedGateRects.isEmpty { return false }
+        for g in closedGateRects.values where World.overlaps(r, g) { return true }
+        return false
+    }
+
+    /// Body-fit query for spawn/traversal checks: no solid tile and no closed gate inside `r`.
+    func bodyFits(_ r: CGRect) -> Bool {
+        let x0 = Int(floor((r.minX + 0.5) / T)), x1 = Int(floor((r.maxX - 0.5) / T))
+        let y0 = Int(floor((r.minY + 0.5) / T)), y1 = Int(floor((r.maxY - 0.5) / T))
+        if x1 >= x0 && y1 >= y0 { for y in y0...y1 { for x in x0...x1 where at(x, y) == .solid { return false } } }
+        return !gateBlocks(r)
+    }
+
+    /// Deterministic dressing on its own RNG stream (layout is already final, so the room grid is untouched).
+    /// Pillars <=2 and skeleton <=1 per room; heal potions <=3, growth potion <=1 (p 0.20), one optional
+    /// plate/gate alcove (omitted when unsafe); exit frame wraps the portal.
+    func placeDecor(seed: UInt64) {
+        decor = []; closedGateRects = [:]
+        var r = RNG(seed ^ 0xDEC0_7A7E_5EED_0006)
+        let rw = World.roomW, rh = World.roomH
+        let pt = { (x: Int, y: Int) in CGPoint(x: (CGFloat(x) + 0.5) * T, y: CGFloat(y) * T) }
+        func floorY(_ x: Int, _ oy: Int) -> Int? {
+            for y in (oy + 2)...(oy + rh - 4) where at(x, y) == .empty && at(x, y - 1) == .solid { return y }
+            return nil
+        }
+        func clear(_ x: Int, _ y: Int, _ n: Int) -> Bool { (0..<n).allSatisfy { at(x, y + $0) == .empty } }
+        func nearActor(_ x: Int, _ y: Int, _ d: Int) -> Bool {
+            if abs(x - start.x) <= d + 1 && abs(y - start.y) <= d + 2 { return true }
+            if abs(x - portal.x) <= d + 1 && abs(y - portal.y) <= d + 2 { return true }
+            return spawns.contains { abs($0.x - x) <= d && abs($0.y - y) <= d + 2 }
+        }
+        var used = Set<Int>()   // tile columns*1000+row claimed by live props
+        func safePickup(_ x: Int, _ y: Int) -> Bool {
+            guard at(x, y - 1) == .solid, at(x - 1, y - 1) != .spike, at(x + 1, y - 1) != .spike else { return false }
+            guard clear(x - 1, y, 2), clear(x, y, 2), clear(x + 1, y, 2) else { return false }
+            return !nearActor(x, y, 3) && !used.contains(x * 1000 + y)
+        }
+        var heals = 0
+        // 1. Optional plate/gate alcove: a 2-wide dead end against a doorless room wall.
+        pair: for (i, c) in Array(rooms.enumerated()).shuffledWith(&r) where i > 0 && i < rooms.count - 1 {
+            let ox = c.x * rw, oy = c.y * rh, fy = oy + 2
+            for left in [r.chance(0.5), true, false] {
+                let wall = left ? ox + 1 : ox + rw - 2, s = left ? 1 : -1
+                let alcove = [wall + s, wall + 2 * s], gx = wall + 3 * s
+                guard (0..<6).allSatisfy({ at(wall, fy + $0) == .solid }) else { continue }
+                guard (alcove + [gx]).allSatisfy({ at($0, fy - 1) == .solid && clear($0, fy, 4) }) else { continue }
+                let lo = min(wall, gx) - 1, hi = max(wall, gx) + 1
+                if spawns.contains(where: { $0.x >= lo && $0.x <= hi && $0.y >= oy && $0.y < oy + rh }) { continue }
+                if (start.x >= lo && start.x <= hi) || (portal.x >= lo && portal.x <= hi) { continue }
+                guard let px = (4...7).map({ gx + $0 * s }).first(where: { at($0, fy - 1) == .solid && at($0, fy) == .empty && clear($0, fy, 2) })
+                else { continue }
+                // Gate spans floor to the first overhead tile (cap 12) so it cannot be hopped.
+                var top = fy
+                while top < fy + 12 && at(gx, top) == .empty { top += 1 }
+                let id = 0
+                decor.append(WorldProp(kind: .gate, position: CGPoint(x: (CGFloat(gx) + 0.5) * T, y: CGFloat(fy) * T), link: id))
+                decor.append(WorldProp(kind: .plate, position: pt(px, fy), link: id))
+                closedGateRects[id] = World.gateRect(column: gx, floor: fy, tiles: top - fy)
+                decor.append(WorldProp(kind: .healPotion, position: pt(alcove[1], fy)))   // reward behind the gate
+                heals += 1
+                for x in alcove + [gx, px] { used.insert(x * 1000 + fy) }
+                break pair
+            }
+        }
+        // 2. Heal potions in safe, wall-adjacent alcoves (cap 3 per depth).
+        for (i, c) in rooms.enumerated() where i > 0 && heals < 3 && r.chance(0.4) {
+            let ox = c.x * rw, oy = c.y * rh
+            let xs = [ox + 3, ox + 4, ox + rw - 4, ox + rw - 5].shuffledWith(&r)
+            if let x = xs.first(where: { x in floorY(x, oy).map { safePickup(x, $0) && gatesClear(pt(x, $0)) } ?? false }), let y = floorY(x, oy) {
+                decor.append(WorldProp(kind: .healPotion, position: pt(x, y))); used.insert(x * 1000 + y); heals += 1
+            }
+        }
+        // 3. Growth potion: at most one per depth, probability 0.20.
+        if rooms.count > 2 && r.chance(0.20) {
+            let i = 1 + r.int(rooms.count - 2), c = rooms[i], ox = c.x * rw, oy = c.y * rh
+            for x in [ox + rw - 4, ox + 3, ox + rw - 5, ox + 4] {
+                if let y = floorY(x, oy), safePickup(x, y), gatesClear(pt(x, y)) {
+                    decor.append(WorldProp(kind: .growthPotion, position: pt(x, y))); used.insert(x * 1000 + y); break
+                }
+            }
+        }
+        // 4. Baked dressing: <=2 pillars and <=1 skeleton per room, never over ledges/solids, never on a gate.
+        for c in rooms {
+            let ox = c.x * rw, oy = c.y * rh
+            var placed: [Int] = []
+            for _ in 0..<2 where r.chance(0.7) {
+                let x = ox + r.range(3, rw - 4)
+                guard let y = floorY(x, oy), clear(x, y, 5), clear(x - 1, y, 5), clear(x + 1, y, 5),
+                      !placed.contains(where: { abs($0 - x) < 5 }), gatesClear(pt(x, y)) else { continue }
+                placed.append(x); decor.append(WorldProp(kind: .pillar, position: pt(x, y)))
+            }
+            if r.chance(0.45) {
+                let x = ox + r.range(3, rw - 4)
+                if let y = floorY(x, oy), clear(x, y, 1), !placed.contains(x), !used.contains(x * 1000 + y) {
+                    decor.append(WorldProp(kind: .skeleton, position: pt(x, y)))
+                }
+            }
+        }
+        decor.append(WorldProp(kind: .exitFrame, position: pt(portal.x, portal.y)))
+    }
+
+    private func gatesClear(_ p: CGPoint) -> Bool {
+        !gateBlocks(CGRect(x: p.x - 24, y: p.y, width: 48, height: 64))
     }
 
     @inline(__always) func at(_ x: Int, _ y: Int) -> Tile {
@@ -108,6 +243,8 @@ final class World {
         let chunk = 16, px = Int(T), cpx = chunk * px
         let stoneImg = Art.stone(theme.rock, variant: 1).cgImage()
         let backImg = Art.backWall(theme.rock).cgImage()
+        let pillarImg = Art.pillar(theme.rock.blended(withFraction: 0.25, of: theme.mist) ?? theme.rock).cgImage()
+        let bakedDecor = decor.filter { $0.kind == .pillar || $0.kind == .skeleton }
         func isSolid(_ x: Int, _ y: Int) -> Bool { at(x, y) == .solid }
         // Chunks are independent: bake them in parallel on all cores (pure CoreGraphics, no SpriteKit).
         var jobs: [(Int, Int)] = []
@@ -132,6 +269,21 @@ final class World {
                     if isSolid(x - 1, y) { shade(ctx, CGRect(x: rx, y: ry, width: s * 0.7, height: s), from: .left, a: 0.5) }
                     if isSolid(x + 1, y) { shade(ctx, CGRect(x: rx + s * 0.3, y: ry, width: s * 0.7, height: s), from: .right, a: 0.5) }
                 } }
+                // 2b. Baked background dressing (v3 §6): pillars + skeletons, behind gameplay, no collision.
+                let cox = CGFloat(cx * px), coy = CGFloat(cy * px)
+                for d in bakedDecor where d.position.x > cox - 40 && d.position.x < cox + CGFloat(cpx) + 40 && d.position.y > coy - 180 && d.position.y < coy + CGFloat(cpx) + 10 {
+                    let lx = d.position.x - cox, ly = d.position.y - coy
+                    if d.kind == .pillar {
+                        ctx.setAlpha(0.62); ctx.draw(pillarImg, in: CGRect(x: lx - 16, y: ly, width: 32, height: 160)); ctx.setAlpha(1)
+                    } else {
+                        ctx.setFillColor(CGColor(gray: 0.78, alpha: 0.8))
+                        ctx.fillEllipse(in: CGRect(x: lx - 14, y: ly + 1, width: 9, height: 8))                  // skull
+                        ctx.fill(CGRect(x: lx - 6, y: ly + 3, width: 18, height: 2))                             // spine
+                        for k in 0..<3 { ctx.fill(CGRect(x: lx - 3 + CGFloat(k) * 4, y: ly + 1, width: 2, height: 7)) }   // ribs
+                        ctx.fill(CGRect(x: lx + 12, y: ly + 1, width: 9, height: 2)); ctx.fill(CGRect(x: lx + 2, y: ly + 1, width: 2, height: 2))
+                        ctx.setFillColor(CGColor(gray: 0, alpha: 0.7)); ctx.fill(CGRect(x: lx - 11, y: ly + 4, width: 2, height: 2))
+                    }
+                }
                 // 3. Masonry for solid tiles (clip to the union of solid rects, draw tiled stone aligned to WORLD coords)
                 ctx.saveGState()
                 var any = false

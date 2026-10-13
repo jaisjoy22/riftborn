@@ -32,6 +32,14 @@ class Body {
             if world.at(Int((r.maxX + 2) / T), ym) == .solid { wallDir = 1 }
             else if world.at(Int((r.minX - 2) / T), ym) == .solid { wallDir = -1 }
         }
+        // Dynamic gates (v3 §6): horizontal push-out against closed gate rects.
+        if !world.closedGateRects.isEmpty {
+            r = rect
+            for g in world.closedGateRects.values where World.overlaps(r, g) {
+                if pos.x < g.midX { pos.x = g.minX - size.width / 2 - 0.01; wallDir = 1 } else { pos.x = g.maxX + size.width / 2 + 0.01; wallDir = -1 }
+                vel.dx = 0; r = rect
+            }
+        }
         let prevBottom = pos.y
         pos.y += vel.dy * dt
         onGround = false
@@ -49,6 +57,14 @@ class Body {
         } else {
             let ty = Int(r.maxY / T)
             for tx in x0...x1 where world.at(tx, ty) == .solid { pos.y = CGFloat(ty) * T - size.height - 0.01; vel.dy = 0; break }
+        }
+        if !world.closedGateRects.isEmpty {
+            r = rect
+            for g in world.closedGateRects.values where World.overlaps(r, g) {
+                if vel.dy <= 0 && prevBottom >= g.maxY - 1 { pos.y = g.maxY; vel.dy = 0; onGround = true }
+                else if vel.dy > 0 && prevBottom + size.height <= g.minY + 1 { pos.y = g.minY - size.height - 0.01; vel.dy = 0 }
+                r = rect
+            }
         }
         node.position = pos
     }

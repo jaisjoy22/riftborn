@@ -27,6 +27,10 @@ final class GameScene: SKScene {
     var bolts: [Bolt] = []
     var props: [(kind: Spawn.Kind, node: SKNode, used: Bool)] = []
     var portalNode: SKNode!
+    /// v3 §6 live environment props (potions, plate/gate, exit frame). Separate from shrine/chest `props`.
+    struct PropState { let descriptor: WorldProp; let node: SKNode; var used: Bool; var timer: Double }
+    var worldProps: [PropState] = []
+    var gateOpenings = 0, pickupsUsed = 0
     weak var synth: Synth?
     let input = Input.shared
 
@@ -119,7 +123,7 @@ final class GameScene: SKScene {
     func buildDepth() {
         let buildStart = Date()
         defer { lastBuildMs = Date().timeIntervalSince(buildStart) * 1000; if ProcessInfo.processInfo.environment["RIFTBORN_PROFILE"] != nil { print(String(format: "buildDepth %.0f ms", lastBuildMs)) } }
-        worldNode.removeAllChildren(); beings.removeAll(); bolts.removeAll(); props.removeAll()
+        worldNode.removeAllChildren(); beings.removeAll(); bolts.removeAll(); props.removeAll(); worldProps.removeAll()
         rng = RNG(chron.seed &+ UInt64(chron.depth) &* 104729)
         theme = makeTheme(&rng, depth: chron.depth)
         if chron.mutator == "Maddening Depths" {
@@ -129,7 +133,14 @@ final class GameScene: SKScene {
         pruneSouls()
         backgroundColor = theme.sky
         world = Prof.time("worldgen") { World(seed: chron.seed, depth: chron.depth) }
-        if let layout = fixtureLayout { layout(world) }
+        if let layout = fixtureLayout {
+            // Fixture geometry replaces the generated layout, so generated decor/gates no longer apply.
+            world.decor = []; world.closedGateRects = [:]
+            layout(world)
+            if !world.decor.contains(where: { $0.kind == .exitFrame }) {
+                world.decor.append(WorldProp(kind: .exitFrame, position: CGPoint(x: (CGFloat(world.portal.x) + 0.5) * T, y: CGFloat(world.portal.y) * T)))
+            }
+        }
         torchSpots = world.torchSpots()
         worldNode.addChild(Prof.time("bake tiles") { world.buildNode(theme: theme, lights: torchSpots) })
         worldNode.addChild(parallaxMid)
@@ -214,6 +225,7 @@ final class GameScene: SKScene {
         let pl = SKLightNode(); pl.categoryBitMask = 1; pl.lightColor = theme.edge; pl.falloff = 1.2; pl.ambientColor = .clear
         portalNode.addChild(pl)
         worldNode.addChild(portalNode)
+        Prof.time("world props") { buildWorldProps() }
 
         title.text = theme.name
         title.alpha = 1; title.run(.sequence([.wait(forDuration: 4), .fadeAlpha(to: 0.35, duration: 1.5)]))
@@ -446,6 +458,96 @@ final class GameScene: SKScene {
         player.update(dt, world, input)
         player.rig.updateTrail(active: player.phase == .active, in: worldNode, color: overcharge > 0 ? .cyan : SKColor(red: 1, green: 0.95, blue: 0.8, alpha: 1))
         Prof.time("beings") { updateBeings(dt) }
+        Prof.time("dynamic props") { updateWorldProps(dt) }
+    }
+
+    // MARK: v3 §6 environment props
+
+    static let gateRiseTime = 0.35, gateResponse = 0.08, pickupRadius: CGFloat = 24
+
+    func buildWorldProps() {
+        worldProps.removeAll()
+        for d in world.decor {
+            let n = SKNode(); n.position = d.position
+            switch d.kind {
+            case .pillar, .skeleton: continue           // baked into chunk textures
+            case .healPotion, .growthPotion:
+                let g = d.kind == .growthPotion
+                let s = SKSpriteNode(texture: Art.potion(growth: g), size: CGSize(width: g ? 18 : 18, height: g ? 30 : 26))
+                s.anchorPoint = CGPoint(x: 0.5, y: 0); s.position = CGPoint(x: 0, y: 2)
+                let glow = SKSpriteNode(texture: Art.softGlow, size: CGSize(width: 44, height: 44)); glow.blendMode = .add; glow.alpha = 0.35
+                glow.color = g ? .green : .red; glow.colorBlendFactor = 1; glow.position = CGPoint(x: 0, y: 14)
+                n.addChild(glow); n.addChild(s); n.zPosition = 2
+            case .plate:
+                let s = SKSpriteNode(texture: Art.plate, size: CGSize(width: 28, height: 6)); s.anchorPoint = CGPoint(x: 0.5, y: 0); s.name = "plate"
+                n.addChild(s); n.zPosition = 1
+            case .gate:
+                guard let id = d.link, let r = world.closedGateRects[id] else { continue }
+                let s = SKSpriteNode(texture: Art.gateBars, size: CGSize(width: r.width + 8, height: r.height)); s.anchorPoint = CGPoint(x: 0.5, y: 1); s.name = "bars"
+                s.position = CGPoint(x: 0, y: r.height)
+                let lintel = SKSpriteNode(color: theme.rock.blended(withFraction: 0.4, of: .black) ?? .darkGray, size: CGSize(width: T + 8, height: 8))
+                lintel.position = CGPoint(x: 0, y: r.height + 4)
+                n.addChild(s); n.addChild(lintel); n.zPosition = 3
+            case .exitFrame:
+                // Wrap the existing portal: arch sits behind the rift, threshold on the floor.
+                let s = SKSpriteNode(texture: Art.exitFrame(theme.rock), size: CGSize(width: 128, height: 176))
+                s.anchorPoint = CGPoint(x: 0.5, y: 0); s.position = CGPoint(x: 0, y: d.position.y - portalNode.position.y); s.zPosition = -1
+                s.name = "exitFrame"; portalNode.addChild(s)
+                worldProps.append(PropState(descriptor: d, node: s, used: false, timer: 0))
+                continue
+            }
+            worldNode.addChild(n)
+            worldProps.append(PropState(descriptor: d, node: n, used: false, timer: 0))
+        }
+    }
+
+    func updateWorldProps(_ dt: CGFloat) {
+        guard !worldProps.isEmpty, let p = player else { return }
+        let pr = p.rect
+        for i in worldProps.indices {
+            let d = worldProps[i].descriptor
+            switch d.kind {
+            case .healPotion, .growthPotion:
+                guard !worldProps[i].used, hypot(d.position.x - p.pos.x, d.position.y - p.pos.y) < GameScene.pickupRadius else { continue }
+                if d.kind == .healPotion {
+                    guard p.hp < p.maxHP else { continue }        // consume only if HP is missing
+                    worldProps[i].used = true
+                    p.hp = min(p.maxHP, p.hp + 25); flash("Restored")
+                } else {
+                    worldProps[i].used = true
+                    chron.maxHP += 5; p.maxHP = CGFloat(chron.maxHP); p.hp = min(p.maxHP, p.hp + 5); flash("Vitality +5")
+                    saveChronicle()
+                }
+                pickupsUsed += 1
+                worldProps[i].node.run(.sequence([.group([.fadeOut(withDuration: 0.25), .moveBy(x: 0, y: 18, duration: 0.25)]), .removeFromParent()]))
+            case .plate:
+                guard !worldProps[i].used, let link = d.link else { continue }
+                let trig = CGRect(x: d.position.x - 14, y: d.position.y - 1, width: 28, height: 6)
+                if pr.intersects(trig) && p.onGround { worldProps[i].used = true; openGate(link); worldProps[i].node.childNode(withName: "plate")?.position.y = -3 }
+            case .gate:
+                guard worldProps[i].used, worldProps[i].timer < GameScene.gateRiseTime, let id = d.link else { continue }
+                worldProps[i].timer += Double(dt)
+                let t = min(1, worldProps[i].timer / GameScene.gateRiseTime)
+                guard let bars = worldProps[i].node.childNode(withName: "bars") as? SKSpriteNode else { continue }
+                // Visible 0.08 s initial jolt, then an ease-out retraction into the lintel (never pokes through stone).
+                let h = bars.size.height / max(bars.yScale, 0.001)
+                let jolt: CGFloat = worldProps[i].timer < GameScene.gateResponse ? CGFloat(worldProps[i].timer / GameScene.gateResponse) * 6 : 6
+                let rise = CGFloat(1 - (1 - t) * (1 - t))
+                let lifted = min(h - 6, jolt + rise * (h - 6))
+                bars.yScale = (h - lifted) / h
+                // Collision stays until the gate's bottom clears actor height.
+                if lifted > 72 || t >= 1 { world.closedGateRects[id] = nil }
+            case .pillar, .skeleton, .exitFrame: break
+            }
+        }
+    }
+
+    /// Opens a linked gate permanently for this depth (gates only ever open; never close on an actor).
+    func openGate(_ id: Int) {
+        for i in worldProps.indices where worldProps[i].descriptor.kind == .gate && worldProps[i].descriptor.link == id && !worldProps[i].used {
+            worldProps[i].used = true; worldProps[i].timer = 0; gateOpenings += 1
+            synth?.sfxClang = max(synth?.sfxClang ?? 0, 0.4)
+        }
     }
 
     func updateBeings(_ dt: CGFloat) {
