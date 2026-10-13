@@ -1,0 +1,511 @@
+# CODE DIGEST (signatures + key constants; generated 2026-10-13)
+
+## Sources/Art.swift (     193 lines)
+6:enum Art {
+7:    static var cache: [String: SKTexture] = [:]
+11:    static func normalMap(from img: CGImage, strength: Double = 2.2) -> CGImage {
+12:        let w = img.width, h = img.height
+29:                var nx = -gx * s, ny = gy * s, nz: Float = 1
+42:    static func paint(_ key: String, _ w: Int, _ h: Int, _ draw: (CGContext) -> Void) -> SKTexture {
+54:    static func rgba(_ c: SKColor, _ a: CGFloat = 1) -> CGColor {
+60:    static func stone(_ base: SKColor, variant: Int) -> SKTexture {
+64:            let rows = 4
+66:            let patterns: [[CGFloat]] = [[64, 64], [48, 80], [80, 48], [32, 48, 48], [48, 48, 32], [40, 48, 40]]
+70:                var x: CGFloat = row % 2 == 0 ? 0 : -16
+103:    static func backWall(_ base: SKColor) -> SKTexture {
+109:                var x: CGFloat = row % 2 == 0 ? 0 : -32
+135:    static func skyGradient(_ top: SKColor, _ bottom: SKColor) -> SKTexture {
+142:    static var softGlow: SKTexture {
+149:    static var vignette: SKTexture {
+156:    static var spark: SKTexture {
+164:    static func torch(light color: SKColor) -> SKNode {
+
+## Sources/Core.swift (      91 lines)
+4:let T: CGFloat = 32          // tile size in points
+5:let GRAVITY: CGFloat = -2200
+8:struct RNG {
+9:    var s: UInt64
+10:    init(_ seed: UInt64) { s = (seed &* 6364136223846793005) &+ 0x9E3779B97F4A7C15; if s == 0 { s = 1 } }
+19:enum Act: Hashable { case left, right, up, down, jump, attack, dash, block, talk, power, opt1, opt2, opt3, cycle, pause }
+21:final class Input {
+22:    static let shared = Input()
+25:    private var now = Set<Act>(), prev = Set<Act>()
+27:    func poll() {
+29:        var s = synthetic
+30:        func k(_ codes: UInt16...) -> Bool { codes.contains { keys.contains($0) } }
+47:            let x = g.leftThumbstick.xAxis.value, y = g.leftThumbstick.yAxis.value
+64:    func held(_ a: Act) -> Bool { now.contains(a) }
+65:    func hit(_ a: Act) -> Bool { now.contains(a) && !prev.contains(a) }
+68:struct Theme {
+69:    let name: String
+70:    let sky: SKColor, rock: SKColor, edge: SKColor, mist: SKColor
+73:func makeTheme(_ r: inout RNG, depth: Int) -> Theme {
+74:    let places = ["Archive", "Hive", "Spire", "Cistern", "Foundry", "Reliquary", "Labyrinth", "Nest", "Observatory", "Catacomb"]
+75:    let adj = ["Drowned", "Chitinous", "Psionic", "Ashen", "Weeping", "Shattered", "Hollow", "Burning", "Silent", "Dreaming"]
+84:func clamp<V: Comparable>(_ v: V, _ lo: V, _ hi: V) -> V { min(max(v, lo), hi) }
+86:func label(_ text: String, size: CGFloat, color: SKColor = .white, bold: Bool = false) -> SKLabelNode {
+
+## Sources/Entities.swift (     504 lines)
+4:class Body {
+5:    var pos: CGPoint            // bottom-center
+6:    var vel = CGVector.zero
+7:    let size: CGSize
+8:    var onGround = false, wallDir = 0, dropThrough = 0.0
+11:    init(pos: CGPoint, size: CGSize) { self.pos = pos; self.size = size }
+13:    var rect: CGRect { CGRect(x: pos.x - size.width / 2, y: pos.y, width: size.width, height: size.height) }
+15:    func step(_ dt: CGFloat, _ world: World, gravity: CGFloat = GRAVITY) {
+20:        var r = rect
+21:        let y0 = Int((r.minY + 2) / T), y1 = Int((r.maxY - 2) / T)
+35:        let prevBottom = pos.y
+39:        let x0 = Int((r.minX + 2) / T), x1 = Int((r.maxX - 2) / T)
+56:    func standingOnSpike(_ world: World) -> Bool {
+64:enum Phase { case none, windup, active, recovery }
+66:struct AttackSpec {
+67:    let windup: Double, active: Double, recovery: Double
+68:    let lunge: CGFloat, reach: CGFloat, damage: CGFloat, knock: CGFloat, hitStop: Double, shake: CGFloat
+69:    static let light1 = AttackSpec(windup: 0.085, active: 0.075, recovery: 0.17, lunge: 230, reach: 58, damage: 1.0, knock: 240, hitStop: 0.055, shake: 5)
+70:    static let light2 = AttackSpec(windup: 0.075, active: 0.075, recovery: 0.17, lunge: 260, reach: 60, damage: 1.1, knock: 260, hitStop: 0.06, shake: 6)
+71:    static let heavy  = AttackSpec(windup: 0.17, active: 0.10, recovery: 0.32, lunge: 520, reach: 76, damage: 2.4, knock: 560, hitStop: 0.12, shake: 13)
+76:final class Player: Body {
+77:    var hp: CGFloat = 100, maxHP: CGFloat = 100
+78:    var energy: CGFloat = 100
+79:    var facing: CGFloat = 1
+80:    var phase = Phase.none, phaseT = 0.0, combo = 0, bufferedAttack = 0.0
+81:    var spec = AttackSpec.light1
+82:    var swingId = 0
+83:    var dashTimer = 0.0, dashCD = 0.0, invuln = 0.0
+84:    var blocking = false, parryWindow = 0.0
+85:    var wallRunTime = 0.0, coyote = 0.0, jumpBuffer = 0.0
+86:    var hurtFlash = 0.0, hurtPose = 0.0, landSquash = 0.0
+87:    var powerIndex = 0
+88:    let rig: Rig
+89:    private var runPhase: CGFloat = 0, clock: CGFloat = 0
+90:    private var cur = Pose.guardStance
+91:    private let shadow = SKSpriteNode(texture: Art.softGlow, size: CGSize(width: 44, height: 10))
+92:    var onWhoosh: (() -> Void)?
+94:    init(pos: CGPoint) {
+105:    var attacking: Bool { phase != .none }
+106:    var threatening: Bool { phase == .windup || phase == .active }
+108:    func startAttack() {
+116:    func recoil() { phase = .recovery; phaseT = 0.38; combo = 0; vel.dx = -facing * 260 }
+118:    func update(_ dt: CGFloat, _ w: World, _ inp: Input) {
+129:        var dir: CGFloat = 0
+140:                case .windup:
+143:                case .active: phase = .recovery; phaseT = spec.recovery
+144:                case .recovery: phase = .none
+145:                case .none: break
+158:        let wasBlocking = blocking
+176:            let speed: CGFloat = blocking ? 90 : 300
+177:            let accel: CGFloat = onGround ? 3000 : 1600
+178:            let target = dir * speed
+182:        var wallRunning = false
+203:        let wasAir = !onGround, fallSpeed = vel.dy
+210:    private func animate(_ dt: CGFloat, wallRunning: Bool) {
+211:        var target: Pose
+212:        var rate: CGFloat = 16
+213:        let heavy = combo == 2
+215:        case .windup:  target = heavy ? .heavyWindup : .windup; rate = 30
+216:        case .active:  target = heavy ? .heavyStrike : .strike; rate = 60     // near-instant: reads as a smear
+217:        case .recovery: target = .recover; rate = 9
+218:        case .none:
+239:    var swing: CGRect? {
+241:        let reach = spec.reach
+244:    var swingDamage: CGFloat { spec.damage }
+249:final class Being: Body {
+250:    enum Role { case hostile, wanderer, ally, fleeing }
+251:    var soul: Soul
+252:    var role: Role
+253:    var hp: CGFloat, maxHP: CGFloat
+
+## Sources/GameScene.swift (     780 lines)
+4:final class GameScene: SKScene {
+6:    var world: World!
+7:    var theme: Theme!
+9:    let worldNode = SKNode()
+12:    var player: Player!
+13:    var beings: [Being] = []
+14:    var bolts: [Bolt] = []
+15:    var props: [(kind: Spawn.Kind, node: SKNode, used: Bool)] = []
+16:    var portalNode: SKNode!
+18:    let input = Input.shared
+21:    enum Mode { case play, dialogue, portal, dead, paused }
+22:    var mode: Mode = .play
+23:    var talkingTo: Being?
+24:    var dialogueOptions: [String] = []
+25:    var portalOptions: [(String, String)] = []
+26:    var slowTime = 0.0, overcharge = 0.0
+27:    var shake: CGFloat = 0, shakeDir: CGFloat = 0, zoomPunch: CGFloat = 0
+28:    var hitStop = 0.0, slowMoT = 0.0, damageVignette: CGFloat = 0
+29:    var camBase = CGPoint.zero
+30:    let parallaxFar = SKNode(), parallaxMid = SKNode()
+32:    let hurtOverlay = SKSpriteNode(texture: Art.vignette)
+33:    var lastTime: TimeInterval = 0
+34:    var lastBuildMs = 0.0
+37:    var toast: [(SKLabelNode, Double)] = []
+40:    let hpBar = SKSpriteNode(color: SKColor(red: 0.9, green: 0.15, blue: 0.2, alpha: 1), size: CGSize(width: 220, height: 12))
+41:    let enBar = SKSpriteNode(color: SKColor(red: 0.2, green: 0.7, blue: 1, alpha: 1), size: CGSize(width: 220, height: 6))
+44:    let powerLabel = label("", size: 12)
+46:    let panelText = SKLabelNode(fontNamed: "Menlo")
+48:    let hpBack = SKSpriteNode(color: SKColor(white: 0.1, alpha: 0.9), size: CGSize(width: 224, height: 16))
+49:    let enBack = SKSpriteNode(color: SKColor(white: 0.1, alpha: 0.9), size: CGSize(width: 224, height: 10))
+53:    func setup() {
+69:        let hintPlate = SKShapeNode(rectOf: CGSize(width: 900, height: 24), cornerRadius: 12)
+87:    func layoutHUD() {
+88:        let w = size.width / 2, h = size.height / 2
+106:    func buildDepth() {
+107:        let buildStart = Date()
+134:        let mut = chron.mutator
+141:            case .enemy:
+142:                var soul: Soul
+148:                    let biasHive = chron.repOf(.hive) < -4 && rng.chance(0.5)
+153:                var role: Being.Role = soul.debt > 0 && soul.grudge == 0 ? .ally : .hostile
+156:            case .wanderer:
+159:            case .shrine:
+170:            case .chest:
+208:    func addParallax() {
+218:        var x: CGFloat = -2200
+261:    var torchSpots: [CGPoint] = []
+262:    var lightPool: [SKLightNode] = []
+263:    func addLighting() {
+264:        let torchColor = SKColor(red: 1, green: 0.62, blue: 0.25, alpha: 1)
+277:    let playerLight = SKLightNode()
+279:    func spawnBeing(_ s: Soul, at p: CGPoint, role: Being.Role) {
+280:        var soul = s
+289:    func writeBack(_ b: Being) {
+295:    func pruneSouls() {
+296:        let cap = 240
+301:        let rest = chron.souls.filter { s in !keep.contains { $0.id == s.id } }
+313:    static let logFrames = CommandLine.arguments.contains("--fpslog")
+315:    func tick(_ dt: CGFloat) {
+319:    func tickInner(_ dt: CGFloat) {
+326:        case .play: play(dt)
+327:        case .dialogue: dialogue()
+328:        case .portal: portalChoice()
+329:        case .dead: if input.hit(.jump) || input.hit(.opt1) { respawn() }
+330:        case .paused: break
+340:    func updateCamera(_ dt: CGFloat) {
+342:        let zoom: CGFloat = 480 / max(400, size.height)
+346:        let halfW = size.width * zoom / 2, halfH = size.height * zoom / 2
+347:        let maxX = CGFloat(world.w) * T, maxY = CGFloat(world.h) * T
+368:    func impact(at p: CGPoint, dir: CGFloat, stop: Double, shake s: CGFloat, color: SKColor, blood: Bool, heavy: Bool) {
+
+## Sources/main.swift (     213 lines)
+4:final class GameView: SKView {
+11:final class AppDelegate: NSObject, NSApplicationDelegate {
+12:    var window: NSWindow!
+15:    func applicationDidFinishLaunching(_ n: Notification) {
+45:            let path = CommandLine.arguments[i + 1]
+48:                let cs = scene.camera?.xScale ?? 1, cp = scene.camera?.position ?? .zero
+49:                let vw = scene.size.width * cs, vh = scene.size.height * cs
+63:    func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
+64:    func applicationWillTerminate(_ n: Notification) { synth.engine.stop() }
+69:func selfTest() -> Int32 {
+75:    var failures: [String] = []
+76:    let inp = Input.shared
+78:    let t0 = Date()
+79:    var depthsSeen = Set<Int>()
+80:    var frame = 0
+84:        let p = scene.player!
+86:        case .dialogue: inp.synthetic.insert(r.chance(0.5) ? .opt1 : .opt2)
+87:        case .portal: inp.synthetic.insert([.opt1, .opt2, .opt3][r.int(3)])
+88:        case .dead: inp.synthetic.insert(.jump)
+89:        case .paused: inp.synthetic.insert(.pause)
+90:        case .play:
+92:            let dx = scene.portalNode.position.x - p.pos.x, dy = scene.portalNode.position.y - p.pos.y
+108:    let c = scene.chron
+132:        let i2 = Input(); var seen: [Phase] = []; var sawHurtbox = false
+150:        let p = ds.player!
+157:        var parried = 0, blocked = 0, stunnedAfterParry = false
+158:        var reacting = false
+165:            let pp = ds.combat.parries, pb = ds.combat.playerBlocks
+195:func audioTest() -> Int32 {
+209:let app = NSApplication.shared
+210:let delegate = AppDelegate()
+
+## Sources/Mind.swift (     179 lines)
+5:enum Faction: String, Codable, CaseIterable {
+6:    case hive = "The Hive", wardens = "Iron Wardens", echoes = "The Echoes"
+9:enum Motive: String, Codable, CaseIterable {
+10:    case vengeance, duty, hunger, faith, fear, redemption, curiosity
+14:struct Soul: Codable {
+15:    var id: Int
+16:    var name: String
+17:    var faction: Faction
+18:    var motive: Motive
+19:    var backstory: String
+20:    var kinOf: Int? = nil          // the soul whose fate created this one
+21:    var grudge: Int = 0            // 0 neutral, >0 hostile memory of the player
+22:    var debt: Int = 0              // >0 owes the player (spared / helped)
+23:    var alive = true
+24:    var metCount = 0
+25:    var level = 1
+28:struct Chronicle: Codable {
+29:    var seed: UInt64 = UInt64(Date().timeIntervalSince1970)
+30:    var depth = 1
+31:    var souls: [Soul] = []
+32:    var nextId = 1
+33:    var rep: [String: Int] = [:]     // faction rawValue -> reputation
+34:    var log: [String] = []
+35:    var mercy = 0, cruelty = 0
+36:    var xp = 0, level = 1, shards = 0
+37:    var maxHP = 100, power = 10
+38:    var powers: [String] = []        // learned powers
+39:    var choicesAtPortal: [String] = []
+40:    var mutator = "None"
+41:    var deaths = 0
+43:    func repOf(_ f: Faction) -> Int { rep[f.rawValue] ?? 0 }
+47:    var alignment: String {
+53:    static var url: URL {
+59:    static func load() -> Chronicle {
+63:    func save() { if let d = try? JSONEncoder().encode(self) { try? d.write(to: Chronicle.url) } }
+68:enum Mind {
+69:    static let first = ["Vashti", "Kerran", "Oru", "Selket", "Dagan", "Ithra", "Mozz", "Talvane", "Rhea", "Zeru", "Kasimir", "Nyx", "Barek", "Ilun", "Saffa", "Tor", "Quell", "Amaru"]
+70:    static let epithet = ["the Hollow", "Who Counts", "of the Ninth Brood", "the Last Warden", "Ashtongue", "the Patient", "Blind-Eye", "the Unforgiven", "Glasshand", "the Hungering", "Twice-Born", "the Quiet"]
+72:    static func newSoul(_ c: inout Chronicle, _ r: inout RNG, faction: Faction? = nil, motive: Motive? = nil, kinOf: Int? = nil) -> Soul {
+84:    static func story(_ s: Soul, _ c: Chronicle, _ r: inout RNG) -> String {
+93:        case .vengeance: return r.pick(["The last rift-walker burned my brood. You wear the same light.", "I have sharpened one claw for thirty cycles. It has your name."])
+94:        case .duty: return r.pick(["I guard this threshold because no one relieved me. No one ever will.", "The Wardens swore an oath to a king long dead. I still keep it."])
+95:        case .hunger: return r.pick(["The Hive starves. Your shards could feed a thousand larvae.", "I am not cruel. I am hungry. There is a difference, rift-walker."])
+96:        case .faith: return r.pick(["The Echo-Mother dreams this place. You are a nightmare she wants ended.", "Every rift is a prayer. You are interrupting mine."])
+97:        case .fear: return r.pick(["Please. They make us fight. If I don't, the Overmind unmakes me.", "I've seen what's at the bottom. I won't let you open it."])
+98:        case .redemption: return r.pick(["I opened the first rift. Every monster here is my fault.", "I betrayed my sworn-kin once. I will not do it again."])
+99:        case .curiosity: return r.pick(["You are the first thing in a hundred cycles I didn't understand.", "I want to see where your path ends. Even if it ends me."])
+104:    static func greet(_ s: Soul, _ c: Chronicle, _ r: inout RNG) -> String {
+114:    static func choices(_ s: Soul) -> (String, String) {
+116:        case .vengeance: return ("Apologize for what was done", "Tell them grief makes them weak")
+117:        case .duty:      return ("Release them from their oath", "Order them to kneel")
+118:        case .hunger:    return ("Give 5 shards to feed the Hive", "Take what little they have")
+119:        case .faith:     return ("Ask about the Echo-Mother", "Mock their dreaming god")
+120:        case .fear:      return ("Promise to protect them", "Use their fear against them")
+121:        case .redemption:return ("Offer them a second chance", "Say some sins stay")
+122:        case .curiosity: return ("Invite them to walk with you", "Warn them away")
+127:    static func resolve(_ s: inout Soul, choice: Int, _ c: inout Chronicle, _ r: inout RNG) -> (String, Bool, Bool) {
+156:    static func deathLine(_ s: Soul, _ r: inout RNG) -> String {
+158:        case .vengeance: return "Someone... will finish... this."
+159:        case .duty: return "Relieved... at last."
+160:        case .hunger: return "Feed... them..."
+161:        case .faith: return "The Mother... wakes..."
+162:        case .fear: return "I told them... I told them..."
+163:        case .redemption: return "Not... enough..."
+164:        case .curiosity: return r.pick(["So that's... the end.", "Show me... what's next."])
+168:    static let allPowers = ["Psi Storm", "Blink", "Chrono Slow", "Swarm Spawn", "Overcharge"]
+170:    static func portalProphecy(_ c: Chronicle) -> String {
+171:        let lines = [
+
+## Sources/Prof.swift (      20 lines)
+5:enum Prof {
+6:    static let on = ProcessInfo.processInfo.environment["RIFTBORN_PROFILE"] != nil
+7:    static var acc: [String: Double] = [:]
+9:    static func time<T>(_ label: String, _ f: () -> T) -> T {
+11:        let t0 = CFAbsoluteTimeGetCurrent()
+16:    static func dump() {
+
+## Sources/Rig.swift (     261 lines)
+5:struct Pose {
+6:    var torso: CGFloat = 0, head: CGFloat = 0, bodyY: CGFloat = 0, lean: CGFloat = 0
+7:    var shF: CGFloat = -0.3, elF: CGFloat = 0.4, shB: CGFloat = 0.3, elB: CGFloat = 0.3
+8:    var hipF: CGFloat = 0.1, knF: CGFloat = 0, hipB: CGFloat = -0.1, knB: CGFloat = 0
+9:    var sword: CGFloat = -0.5
+11:    static func lerp(_ a: Pose, _ b: Pose, _ t: CGFloat) -> Pose {
+12:        func l(_ x: CGFloat, _ y: CGFloat) -> CGFloat { x + (y - x) * t }
+20:    static let idle = Pose()
+21:    static let guardStance = Pose(torso: 0.05, shF: 0.9, elF: 0.5, shB: -0.4, elB: 1.2, hipF: 0.35, knF: -0.35, hipB: -0.35, knB: -0.2, sword: 0.15)
+22:    static let windup = Pose(torso: 0.32, head: -0.1, lean: -4, shF: 2.5, elF: 0.7, shB: -0.8, elB: 1.0, hipF: 0.2, knF: -0.5, hipB: -0.55, knB: -0.4, sword: 1.2)
+23:    static let strike = Pose(torso: -0.38, head: 0.2, lean: 10, shF: 1.35, elF: -0.05, shB: -1.2, elB: 0.4, hipF: 0.9, knF: -0.7, hipB: -0.75, knB: -0.1, sword: -0.08)
+24:    static let heavyWindup = Pose(torso: 0.5, head: -0.2, bodyY: -4, lean: -6, shF: 3.0, elF: 0.4, shB: 2.6, elB: 0.6, hipF: 0.5, knF: -1.0, hipB: -0.5, knB: -0.6, sword: 1.6)
+25:    static let heavyStrike = Pose(torso: -0.6, head: 0.25, bodyY: -8, lean: 14, shF: 0.4, elF: -0.1, shB: 0.3, elB: 0.1, hipF: 1.2, knF: -1.2, hipB: -0.9, knB: -0.1, sword: -0.9)
+26:    static let recover = Pose(torso: -0.12, lean: 4, shF: 0.7, elF: 0.3, shB: -0.6, elB: 0.9, hipF: 0.5, knF: -0.5, hipB: -0.45, knB: -0.2, sword: -0.3)
+27:    static let block = Pose(torso: 0.12, lean: -2, shF: 1.6, elF: 1.1, shB: 1.1, elB: 1.4, hipF: 0.4, knF: -0.5, hipB: -0.5, knB: -0.3, sword: 1.45)
+28:    static let hurt = Pose(torso: 0.45, head: 0.4, lean: -8, shF: -0.6, elF: 0.8, shB: 0.8, elB: 0.5, hipF: -0.2, knF: -0.3, hipB: 0.3, knB: -0.4, sword: -1.2)
+29:    static let jump = Pose(torso: -0.1, head: 0.1, shF: 2.2, elF: 0.6, shB: -0.9, elB: 0.6, hipF: 1.2, knF: -1.6, hipB: -0.2, knB: -1.1, sword: 0.6)
+30:    static let fall = Pose(torso: 0.05, shF: 2.6, elF: 0.4, shB: 2.4, elB: 0.5, hipF: 0.5, knF: -0.5, hipB: -0.3, knB: -0.6, sword: 1.0)
+31:    static let wallRun = Pose(torso: -0.25, head: 0.15, shF: 2.4, elF: 0.8, shB: -1.4, elB: 0.6, hipF: 1.5, knF: -1.4, hipB: 0.2, knB: -1.6, sword: -1.0)
+32:    static let dash = Pose(torso: -0.7, head: 0.4, bodyY: -10, lean: 8, shF: -0.4, elF: 0.2, shB: -1.4, elB: 0.2, hipF: 1.3, knF: -1.6, hipB: -1.0, knB: -0.3, sword: -1.4)
+33:    static let dead = Pose(torso: 1.45, head: 0.3, bodyY: -26, lean: -16, shF: 2.8, elF: 0.2, shB: 2.4, elB: 0.2, hipF: 1.2, knF: 0, hipB: 1.0, knB: 0, sword: 2.0)
+35:    static func run(_ p: CGFloat) -> Pose {
+42:    static func breathe(_ t: CGFloat) -> Pose { var p = Pose.guardStance; p.bodyY = sin(t * 2.2) * 1.2; p.shF += sin(t * 2.2) * 0.04; return p }
+45:enum Weapon { case scimitar, glaive, claws, staff }
+47:struct RigStyle {
+48:    var skin: SKColor, cloth: SKColor, accent: SKColor, metal: SKColor
+49:    var scale: CGFloat = 1, bulk: CGFloat = 1
+50:    var weapon: Weapon = .scimitar
+51:    var turban = true, cape = false, crouch: CGFloat = 0
+54:final class Rig {
+56:    private let pelvis = SKNode(), chest = SKNode(), head = SKSpriteNode()
+57:    private let uaF = SKSpriteNode(), laF = SKSpriteNode(), uaB = SKSpriteNode(), laB = SKSpriteNode()
+58:    private let ulF = SKSpriteNode(), llF = SKSpriteNode(), ulB = SKSpriteNode(), llB = SKSpriteNode()
+59:    private let torsoSpr = SKSpriteNode(), sash = SKSpriteNode()
+62:    private var trailPts: [CGPoint] = []
+63:    private var parts: [SKSpriteNode] = []
+64:    var pose = Pose.idle
+65:    let style: RigStyle
+66:    let L: CGFloat  // limb unit
+68:    init(_ s: RigStyle) {
+71:        let bk = s.bulk
+72:        func limb(_ n: SKSpriteNode, _ w: CGFloat, _ h: CGFloat, _ col: SKColor) {
+103:        case .scimitar: blade.texture = Rig.scimitarTex; blade.size = CGSize(width: 10, height: 40 * s.scale)
+104:        case .glaive: blade.texture = Rig.scimitarTex; blade.size = CGSize(width: 12, height: 56 * s.scale)
+105:        case .staff: blade.texture = Rig.staffTex; blade.size = CGSize(width: 6, height: 50 * s.scale)
+106:        case .claws: blade.texture = Rig.clawTex; blade.size = CGSize(width: 12, height: 18 * s.scale)
+112:            let c2 = SKSpriteNode(texture: Rig.clawTex, size: blade.size); c2.anchorPoint = blade.anchorPoint
+124:    private var keylines: [SKSpriteNode] = []
+126:    private func buildKeylines() {
+137:    var height: CGFloat { L * 4.4 }
+139:    func apply(_ p: Pose, facing: CGFloat) {
+153:    func updateTrail(active: Bool, in scene: SKNode, color: SKColor) {
+173:    private var lastFlash: CGFloat = -1
+174:    func flash(_ amount: CGFloat) {
+182:    private func baseColor(_ p: SKSpriteNode) -> SKColor {
+194:    static let capsuleNormal: SKTexture = {
+195:        let w = 32, h = 64
+203:        let img = px.withUnsafeMutableBytes { b in
+210:    static let capsule: SKTexture = Art.paint("capsule", 32, 64) { c in
+221:    static func headTex(turban: Bool) -> SKTexture {
+239:    static let scimitarTex: SKTexture = Art.paint("scimitar", 24, 96) { c in
+249:    static let staffTex: SKTexture = Art.paint("staff", 12, 96) { c in
+253:    static let clawTex: SKTexture = Art.paint("claw", 24, 36) { c in
+
+## Sources/Synth.swift (     200 lines)
+6:final class Synth {
+8:    private var node: AVAudioSourceNode!
+9:    private let sr: Double = 44100
+12:    var intensity: Float = 0          // 0 explore -> 1 full drop
+13:    var targetIntensity: Float = 0
+14:    var master: Float = 0.55
+15:    var root: Int = 45                // MIDI A2
+16:    var progression: [Int] = [0, -4, 3, -2]   // i - VI - III - VII (relative semitones)
+19:    var sfxHit: Float = 0, sfxZap: Float = 0, sfxDeath: Float = 0, sfxPortal: Float = 0
+20:    var sfxWhoosh: Float = 0, sfxClang: Float = 0
+21:    private var whPh = 0.0, clPh = [0.0, 0.0, 0.0, 0.0], thPh = 0.0, wlp = 0.0, sidechain = 0.0
+24:    private var t: Double = 0
+25:    private var kPhase = 0.0, bPhase = 0.0, b2Phase = 0.0, subPhase = 0.0, arpPhase = 0.0
+26:    private var padPh = [Double](repeating: 0, count: 6)
+27:    private var lp = 0.0, bp = 0.0            // SVF for bass
+28:    private var hpPrev = 0.0, hpOut = 0.0
+29:    private var noise: UInt32 = 22222
+30:    private var lastStep = -1
+31:    private var kickEnv = 0.0, clapEnv = 0.0, hatEnv = 0.0, openHatEnv = 0.0, arpEnv = 0.0
+32:    private var arpNote = 0
+33:    private var zPh = 0.0, pPh = 0.0
+34:    private var reverbBuf = [Float](repeating: 0, count: 44100)
+35:    private var rIdx = 0
+37:    init() {
+41:            let L = buffers[0].mData!.assumingMemoryBound(to: Float.self)
+42:            let R = buffers[1].mData!.assumingMemoryBound(to: Float.self)
+44:                let (l, r) = self.render()
+53:    func start() { try? engine.start() }
+55:    func reseed(_ r: inout RNG) {
+56:        let roots = [40, 41, 43, 45, 46, 38]
+58:        let progs = [[0, -4, 3, -2], [0, 3, -2, -4], [0, -5, -4, -2], [0, 5, 3, -2], [0, -2, -4, -5]]
+69:    private func render() -> (Float, Float) {
+71:        let I = Double(intensity)
+72:        let bpm = 128 + 12 * I
+73:        let spb = 60 / bpm                       // seconds per beat
+74:        let stepLen = spb / 4                    // 16th note
+75:        let stepF = t / stepLen
+77:        let stepPos = stepF - Double(step)
+79:        let s16 = step % 16
+80:        let halfTime = I > 0.55
+92:                let pattern = [0, 7, 12, 15, 12, 7, 3, 10]
+102:        let kf = 45 + 180 * kickEnv * kickEnv * kickEnv
+107:        let duck = 1 - 0.75 * kickEnv
+121:        let houseEnv = halfTime ? 0 : max(0, 1 - abs(stepPos - 0.5) * 2) * (s16 % 4 == 2 ? 1 : 0.0)
+128:        let wobRate = (bar % 2 == 0) ? 2.0 : (s16 >= 8 ? 6.0 : 3.0)   // per beat
+130:        let cutoff = 90 + 2400 * lfo * lfo
+132:        let q = 0.25
+134:        let hp = raw - lp - q * bp
+136:        var wob = lp * 0.6 + bp * 0.25
+141:        let intervals: [Double] = [0, 3, 7, 10, 12, 15]
+142:        var pad = 0.0
+159:        let s1: Double = rnd() * fh * 0.35
+160:        let s2: Double = saw(zPh) * fz * 0.2
+161:        let s3: Double = sin(2 * .pi * pPh) * fp * 0.3
+162:        let s4: Double = rnd() * fd * fd * 0.25
+169:        let s5: Double = (wn - wlp) * 0 + wlp * fw * fw * 0.55
+173:        let ratios = [1.0, 2.76, 5.40, 8.93]
+174:        var clang = 0.0
+176:        let s6: Double = clang * fc * fc * 0.32 + rnd() * fc * fc * fc * 0.15
+179:        let s7: Double = sin(2 * .pi * thPh) * fh * fh * 0.6
+182:        let sfx = s1 + s2 + s3 + s4 + s5 + s6 + s7
+184:        let melodic: Double = (sub + wob + pad + arp) * duck * (1 - 0.45 * sidechain)
+185:        let drums: Double = (kick + clap + hats) * (1 - 0.3 * sidechain)
+186:        var mono: Double = drums + melodic + sfx
+190:        let readIdx = (rIdx - delay + reverbBuf.count) % reverbBuf.count
+
+## Sources/World.swift (     264 lines)
+3:enum Tile: UInt8 { case empty = 0, solid, spike, ledge /* one-way platform */ }
+5:struct Spawn { enum Kind { case enemy, wanderer, shrine, chest } ; let kind: Kind; let x: Int; let y: Int }
+9:final class World {
+10:    let w: Int, h: Int
+11:    var g: [Tile]
+12:    var spawns: [Spawn] = []
+16:    init(seed: UInt64, depth: Int) {
+22:        var cells: [(Int, Int)] = [(0, 0)]
+23:        var visited: Set<Int> = [0]
+24:        var cx = 0, cy = 0
+28:            let nx = cx + d.0, ny = cy + d.1
+31:            let key = ny * 6 + nx
+34:        let rw = 26, rh = 22
+35:        func carve(_ x0: Int, _ y0: Int, _ x1: Int, _ y1: Int, _ t: Tile = .empty) {
+39:            let ox = c.0 * rw, oy = c.1 * rh
+42:            var py = oy + 6
+61:            let floorY = oy + 3
+74:            let a = cells[i - 1], b = cells[i]
+75:            let ax = a.0 * rw + rw / 2, ay = a.1 * rh + 3
+76:            let bx = b.0 * rw + rw / 2, by = b.1 * rh + 3
+80:                let x = ax
+84:                var side = 0
+86:                    let sx = side == 0 ? x - 2 : x + 1
+101:    func set(_ x: Int, _ y: Int, _ t: Tile) { if x > 0, y > 0, x < w - 1, y < h - 1 { g[y * w + x] = t } }
+102:    func solidAt(_ p: CGPoint) -> Bool { at(Int(p.x / T), Int(p.y / T)) == .solid }
+106:    func buildNode(theme: Theme, lights: [CGPoint] = []) -> SKNode {
+109:        let stoneImg = Art.stone(theme.rock, variant: 1).cgImage()
+110:        let backImg = Art.backWall(theme.rock).cgImage()
+111:        func isSolid(_ x: Int, _ y: Int) -> Bool { at(x, y) == .solid }
+113:        var jobs: [(Int, Int)] = []
+118:                let (cx, cy) = jobs[ji]
+127:                    let x = cx + lx, y = cy + ly
+137:                var any = false
+149:                    let x = cx + lx, y = cy + ly
+153:                    case .solid:
+154:                        let airAbove = !isSolid(x, y + 1), airBelow = !isSolid(x, y - 1)
+156:                        var depth = 3
+173:                    case .ledge:
+175:                        let top = ry + s
+176:                        let slabH: CGFloat = 16
+187:                            let bx = left ? rx + 2 : rx + s - 16
+195:                    case .spike:
+205:                    case .empty: break
+210:                let lightCtx = CGContext(data: nil, width: cpx, height: cpx, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+216:                let radius: CGFloat = 300
+221:                let lightImg = lightCtx.makeImage()!
+231:            let (cx, cy) = jobs[ji]
+240:    enum Edge { case top, bottom, left, right }
+241:    private func shade(_ c: CGContext, _ rect: CGRect, from e: Edge, a: CGFloat) {
+245:        case .top: c.drawLinearGradient(g, start: CGPoint(x: 0, y: rect.maxY), end: CGPoint(x: 0, y: rect.minY), options: [])
+246:        case .bottom: c.drawLinearGradient(g, start: CGPoint(x: 0, y: rect.minY), end: CGPoint(x: 0, y: rect.maxY), options: [])
+247:        case .left: c.drawLinearGradient(g, start: CGPoint(x: rect.minX, y: 0), end: CGPoint(x: rect.maxX, y: 0), options: [])
+248:        case .right: c.drawLinearGradient(g, start: CGPoint(x: rect.maxX, y: 0), end: CGPoint(x: rect.minX, y: 0), options: [])
+254:    func torchSpots() -> [CGPoint] {
+255:        var out: [CGPoint] = [], lastX = -100, lastY = -1
+
+# SDLPoP design data (hang/climb/grab sequences)
+381:	LABEL(standjump) // standing jump
+402:	LABEL(runjump) // running jump
+491:	LABEL(stepfall) // stepfall
+493:	/* "fall1" */ LABEL(fall1) frame_102_start_fall_1,
+502:	LABEL(stepfall2) // stepfall2 (from frame 12)
+526:	LABEL(jumphangMed) // jumphang (medium: DX = 0)
+534:	LABEL(jumphangLong)// jumphang (long: DX = 4)
+554:	LABEL(hang) // hang
+556:	/* "hang1" */ LABEL(hang1) frame_90_hanging_4, frame_89_hanging_3, frame_88_hanging_2,
+569:	LABEL(hangstraight) // hangstraight
+572:	/* ":loop" */ LABEL(hangstraight_loop) frame_91_hanging_5,
+575:	LABEL(climbfail) // climbfail
+581:	LABEL(climbdown) // climbdown
+590:	LABEL(climbup) // climbup
+602:	LABEL(hangdrop) // hangdrop
+609:	LABEL(hangfall) // hangfall
+687:	LABEL(fallhang) // fall hang
+987:	LABEL(climbstairs) // climb stairs
+1004:	snd(SND_FOOTSTEP), SEQ_END_LEVEL, /* ":loop" */ LABEL(climbstairs_loop) frame_0,
